@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState, type ChangeEvent } from "react"
 import { signOutAndRedirect } from "@/lib/auth/sign-out"
 import { Loader2 } from "lucide-react"
 import {
@@ -27,6 +27,9 @@ export default function ProfilePage() {
   const [loggingOut, setLoggingOut] = useState(false)
   const [name, setName] = useState<string | null>(null)
   const [role, setRole] = useState<string | null>(null)
+  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [avatarError, setAvatarError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   // Derive display values: local edits take priority, fallback to fetched data
   const displayName = name ?? profile?.display_name ?? ""
   const displayRole = role ?? profile?.role ?? ""
@@ -49,6 +52,49 @@ export default function ProfilePage() {
       console.error("Failed to save profile:", err)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleAvatarSelected = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = "" // allow re-selecting the same file
+    if (!file) return
+    setAvatarError(null)
+    setAvatarBusy(true)
+    try {
+      const form = new FormData()
+      form.append("file", file)
+      const res = await fetch("/api/profile/avatar", { method: "POST", body: form })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setAvatarError(data.error ?? "Failed to upload picture")
+        return
+      }
+      mutate()
+    } catch (err) {
+      console.error("Failed to upload avatar:", err)
+      setAvatarError("Failed to upload picture")
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+
+  const handleAvatarRemove = async () => {
+    setAvatarError(null)
+    setAvatarBusy(true)
+    try {
+      const res = await fetch("/api/profile/avatar", { method: "DELETE" })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setAvatarError(data.error ?? "Failed to remove picture")
+        return
+      }
+      mutate()
+    } catch (err) {
+      console.error("Failed to remove avatar:", err)
+      setAvatarError("Failed to remove picture")
+    } finally {
+      setAvatarBusy(false)
     }
   }
 
@@ -127,8 +173,41 @@ export default function ProfilePage() {
               </AvatarFallback>
             </Avatar>
             <div>
-              <Button variant="outline" size="sm" className="mb-2 mr-2">Upload picture</Button>
-              <Button variant="ghost" size="sm" className="mb-2">Remove</Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="hidden"
+                onChange={handleAvatarSelected}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="mb-2 mr-2"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={avatarBusy}
+              >
+                {avatarBusy ? (
+                  <>
+                    <Loader2 className="mr-2 size-4 animate-spin" />
+                    Working...
+                  </>
+                ) : (
+                  "Upload picture"
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mb-2"
+                onClick={handleAvatarRemove}
+                disabled={avatarBusy || !profile?.avatar_url}
+              >
+                Remove
+              </Button>
+              {avatarError && (
+                <p className="text-[13px] text-destructive">{avatarError}</p>
+              )}
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
