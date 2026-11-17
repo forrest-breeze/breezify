@@ -335,11 +335,14 @@ interface DeleteTarget {
 interface DocumentsSubNavProps {
   className?: string
   chrome?: "default" | "builder"
-  routeRoot?: "knowledge" | "kb"
+  routeRoot?: "knowledge" | "editor" | "kb"
   projectSlug?: string | null
   /** Selected portal page, preserved while navigating between its editors. */
   portalPageSlug?: string | null
-  /** Page-level curation applied to the workspace-wide content tree. */
+  /**
+   * Scope applied to the workspace-wide content tree (Home's or a page's).
+   * Null/omitted shows everything.
+   */
   portalPageScope?: PortalScopeEntry[] | null
   /**
    * Structural content roots whose children should appear at the top level.
@@ -367,11 +370,16 @@ interface DocumentsSubNavProps {
 }
 
 function navigationQuery(
-  routeRoot: "knowledge" | "kb",
+  routeRoot: "knowledge" | "editor" | "kb",
   projectSlug?: string | null,
   portalPageSlug?: string | null,
 ): string {
-  if (routeRoot !== "kb") return ""
+  if (routeRoot !== "kb") {
+    // Knowledge keeps the selected portal page so the editor frame stays on it.
+    return portalPageSlug
+      ? `?${new URLSearchParams({ page: portalPageSlug }).toString()}`
+      : ""
+  }
   const params = new URLSearchParams()
   if (projectSlug) params.set("project", projectSlug)
   if (portalPageSlug) params.set("page", portalPageSlug)
@@ -380,24 +388,24 @@ function navigationQuery(
 }
 
 function rootHref(
-  routeRoot: "knowledge" | "kb",
+  routeRoot: "knowledge" | "editor" | "kb",
   projectSlug?: string | null,
   portalPageSlug?: string | null,
 ): string {
   return routeRoot === "kb"
     ? `/kb${navigationQuery(routeRoot, projectSlug, portalPageSlug)}`
-    : "/knowledge"
+    : `/${routeRoot}${navigationQuery(routeRoot, projectSlug, portalPageSlug)}`
 }
 
 function documentHref(
-  routeRoot: "knowledge" | "kb",
+  routeRoot: "knowledge" | "editor" | "kb",
   id: string,
   projectSlug?: string | null,
   portalPageSlug?: string | null,
 ): string {
   return routeRoot === "kb"
     ? `/kb/doc/${id}${navigationQuery(routeRoot, projectSlug, portalPageSlug)}`
-    : `/knowledge/${id}`
+    : `/${routeRoot}/${id}${navigationQuery(routeRoot, projectSlug, portalPageSlug)}`
 }
 
 // Expands a set of folder ids to include every descendant folder. Deleting a
@@ -1185,6 +1193,8 @@ export function DocumentsSubNav({
     y: number
   } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  // Folder whose role-based visibility is being edited.
+  const [visibilityFolderId, setVisibilityFolderId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renamingType, setRenamingType] = useState<"doc" | "folder" | null>(null)
   const [renameValue, setRenameValue] = useState("")
@@ -1208,7 +1218,7 @@ export function DocumentsSubNav({
   const rootTargetFolderId = useBuilderChrome ? projectRootFolderId ?? null : null
   const onFolderPage =
     pathname?.startsWith(
-      routeRoot === "kb" ? "/kb/folder/" : "/knowledge/folder/",
+      routeRoot === "kb" ? "/kb/folder/" : `/${routeRoot}/folder/`,
     ) ?? false
   const selectedFolderId = onFolderPage ? (params?.id as string) ?? null : null
 
@@ -1406,18 +1416,21 @@ export function DocumentsSubNav({
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [hasMultiSelection])
+  // A portal page, or a provided scope (Home's or a page's), narrows the tree
+  // to portal-eligible content.
+  const filterByScope = Boolean(portalPageSlug) || portalPageScope != null
   const pageEligibleFolders = useMemo(
     () =>
-      portalPageSlug
+      filterByScope
         ? (rawFolders ?? []).filter(
             (folder) =>
               folder.kind === "user" && folder.visibility === "workspace",
           )
         : rawFolders ?? [],
-    [portalPageSlug, rawFolders],
+    [filterByScope, rawFolders],
   )
   const pageEligibleDocs = useMemo(() => {
-    if (!portalPageSlug) return rawDocs ?? []
+    if (!filterByScope) return rawDocs ?? []
     const eligibleFolderIds = new Set(
       pageEligibleFolders.map((folder) => folder.id),
     )
@@ -1429,7 +1442,7 @@ export function DocumentsSubNav({
         (document.folder_id === null ||
           eligibleFolderIds.has(document.folder_id)),
     )
-  }, [pageEligibleFolders, portalPageSlug, rawDocs])
+  }, [filterByScope, pageEligibleFolders, rawDocs])
 
   const pageScopeView = useMemo(() => {
     if (portalPageScope == null) return null
@@ -1545,6 +1558,10 @@ export function DocumentsSubNav({
   // A portal project root is a structural wrapper, not a visible section.
   // Surface its immediate children in place of the wrapper so the editor tree
   // matches the published portal and does not require an extra disclosure click.
+  // The workspace-wide Knowledge tree spans every project and page, so it keeps
+  // each root (e.g. "Breeze Docs" and "Breeze API Reference") as its own folder
+  // instead of merging one root's sections in beside the others.
+  const flattenWrapperNames = useBuilderChrome && routeRoot === "kb"
   const structuralRootFolderIds = useMemo(
     () =>
       new Set(
@@ -1553,12 +1570,13 @@ export function DocumentsSubNav({
               .filter(
                 (folder) =>
                   promotedRootFolderIds?.has(folder.id) ||
-                  isPortalWrapperFolderName(folder.display_name || folder.name),
+                  (flattenWrapperNames &&
+                    isPortalWrapperFolderName(folder.display_name || folder.name)),
               )
               .map((folder) => folder.id)
           : [],
       ),
-    [promotedRootFolderIds, rootUserFolders, useBuilderChrome],
+    [flattenWrapperNames, promotedRootFolderIds, rootUserFolders, useBuilderChrome],
   )
   const visibleRootFolders = useMemo(
     () =>
@@ -1833,10 +1851,13 @@ export function DocumentsSubNav({
       // document is an instant client-side URL change. Elsewhere (the legacy
       // kb route, or the tree shown outside Knowledge) navigate normally.
       if (
-        routeRoot === "knowledge" &&
+        routeRoot !== "kb" &&
         canOpenKnowledgeDocumentInPlace(pathname, id)
       ) {
-        openKnowledgeDocumentInPlace(id)
+        openKnowledgeDocumentInPlace(
+          id,
+          navigationQuery(routeRoot, scopedProjectSlug, portalPageSlug),
+        )
         return
       }
       router.push(
@@ -1863,6 +1884,10 @@ export function DocumentsSubNav({
     },
     [applyModifierClick, handleToggleFolder],
   )
+
+  const visibilityFolder = visibilityFolderId
+    ? (folders.find((folder) => folder.id === visibilityFolderId) ?? null)
+    : null
 
   const handleMoveFolder = useCallback(
     async (folderIdToMove: string, newParentId: string | null) => {
@@ -2014,6 +2039,34 @@ export function DocumentsSubNav({
     setErrorMessage(message)
     setTimeout(() => setErrorMessage(null), 3000)
   }, [])
+
+  const handleFolderVisibilityChange = useCallback(
+    async (folderId: string, next: FolderScope) => {
+      await mutateFolders(
+        (current) =>
+          current?.map((folder) =>
+            folder.id === folderId ? { ...folder, ...next } : folder,
+          ),
+        { revalidate: false },
+      )
+      try {
+        const res = await fetch(`/api/folders/${folderId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(next),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error ?? "Failed to change visibility")
+        }
+      } catch (err) {
+        showError(err instanceof Error ? err.message : "Failed to change visibility")
+      } finally {
+        await mutateFolders()
+      }
+    },
+    [mutateFolders, showError],
+  )
 
   const handleReorderFolders = useCallback(
     async (
@@ -2448,7 +2501,7 @@ export function DocumentsSubNav({
   // The knowledge editor allows root docs (New document + New folder); the
   // portal builder is folder-only, so it offers just a new section.
   const openRootMenu = useCallback((x: number, y: number) => {
-    const allowRootDocs = routeRoot === "knowledge"
+    const allowRootDocs = routeRoot !== "kb"
     const estimatedHeight = (allowRootDocs ? 2 : 1) * 36 + 12
     const clampedX = Math.min(x, window.innerWidth - ROW_MENU_WIDTH - 8)
     const clampedY = Math.min(y, window.innerHeight - estimatedHeight - 8)
@@ -2852,6 +2905,32 @@ export function DocumentsSubNav({
       )}
 
       {/* Create folder dialog */}
+      <Dialog
+        open={visibilityFolder !== null}
+        onOpenChange={(open) => {
+          if (!open) setVisibilityFolderId(null)
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {visibilityFolder?.display_name || visibilityFolder?.name || "Folder"}
+            </DialogTitle>
+          </DialogHeader>
+          {visibilityFolder ? (
+            <FolderScopePicker
+              value={{
+                visibility: visibilityFolder.visibility,
+                required_role: visibilityFolder.required_role,
+              }}
+              onChange={(next) =>
+                void handleFolderVisibilityChange(visibilityFolder.id, next)
+              }
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={creatingFolder}
         onOpenChange={(open) => {
@@ -3260,7 +3339,7 @@ export function DocumentsSubNav({
                   <button
                     onClick={() => {
                       setContextMenu(null)
-                      handleOpenFolder(contextMenu.id)
+                      setVisibilityFolderId(contextMenu.id)
                     }}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground"
                   >

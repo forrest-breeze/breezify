@@ -136,6 +136,7 @@ import {
 import type { PortalScopeEntry } from "@/lib/public-kb"
 import { setPages } from "@/lib/portal/builder-ops"
 import {
+  createScopeTreeView,
   resolveScopeRootId,
   scopeKey,
   scopeForRoot,
@@ -389,6 +390,63 @@ function scopeRootOnlyIdsOf(scope: PortalScopeEntry[] | null | undefined): Set<s
       )
       .map((entry) => entry.id),
   )
+}
+
+/**
+ * The folder new root content goes into for a Home scope: its single promoted
+ * root, when that root includes its whole subtree. Null otherwise.
+ */
+function scopeContentRootId(scope: PortalScopeEntry[] | null | undefined): string | null {
+  const promoted = Array.from(scopePromotedIdsOf(scope))
+  return promoted.length === 1 ? promoted[0] : null
+}
+
+function scopeCoversRootContent(
+  scope: PortalScopeEntry[] | null | undefined,
+  rootId: string | null,
+): boolean {
+  if (scope == null) return true
+  if (rootId === null) return false
+  return scope.some(
+    (entry) =>
+      typeof entry === "object" &&
+      entry !== null &&
+      "id" in entry &&
+      entry.id === rootId &&
+      entry.rootOnly !== true &&
+      entry.explicitDocs !== true,
+  )
+}
+
+function scopeWithEntry(
+  scope: PortalScopeEntry[],
+  entry: PortalScopeEntry,
+): PortalScopeEntry[] {
+  const key = JSON.stringify(entry)
+  return scope.some((existing) => JSON.stringify(existing) === key)
+    ? scope
+    : [...scope, entry]
+}
+
+/**
+ * Which portal surface a document belongs to: null for Documents (Home), a
+ * page slug for a page that curates its own docs, undefined when none has it.
+ * Home wins when both include the document.
+ */
+function portalSurfaceForDocument(
+  document: { id: string; folder_id: string | null },
+  homeScope: PortalScopeEntry[] | null,
+  pages: PortalPage[],
+  ctx: ScopeTreeContext,
+): string | null | undefined {
+  if (createScopeTreeView(homeScope, ctx).docChecked(document.id)) return null
+  for (const page of pages) {
+    if (page.scope == null) continue
+    if (createScopeTreeView(page.scope, ctx).docChecked(document.id)) {
+      return page.slug
+    }
+  }
+  return undefined
 }
 
 function projectScopedApiPath(path: string, projectSlug: string | null): string {
@@ -2536,6 +2594,88 @@ export function PortalBuilder({
     if (previewVersion !== null) setPreviewVersion(null)
   }
 
+  // The document tree follows the selected portal page: Documents shows Home's
+  // included docs, a page shows its own (or Home's, when it follows Home).
+  // Every workspace document lives in Editor (/editor).
+  const activeSurfaceScope = activePage
+    ? (activePage.scope ?? currentScope)
+    : currentScope
+  const activeSurfaceFollowsHome = !activePage || activePage.scope == null
+  const treeScope = activeSurfaceScope
+  // New root folders/docs land in Home's promoted root (already in scope);
+  // on a curated page they land at the workspace root and are added to it.
+  const treeRootFolderId = activeSurfaceFollowsHome
+    ? scopeContentRootId(currentScope)
+    : null
+  const treePromotedRootIds = useMemo(
+    () => scopePromotedIdsOf(treeScope),
+    [treeScope],
+  )
+
+  function addToActiveSurfaceScope(entry: PortalScopeEntry): void {
+    if (activeSurfaceFollowsHome) {
+      if (currentScope == null) return
+      if (scopeCoversRootContent(currentScope, treeRootFolderId)) return
+      void handleScopeChange(scopeWithEntry(currentScope, entry))
+      return
+    }
+    if (activePage?.scope) {
+      handlePageScopeChange(activePage.id, scopeWithEntry(activePage.scope, entry))
+    }
+  }
+
+  // Opening a document that the current page doesn't include (from search or
+  // a link) switches the editor to the page that does,
+  // so the frame's header and nav rail describe the document being edited.
+  const { data: workspaceDocuments } = useDocuments({
+    revalidateOnFocus: false,
+  })
+  const surfaceScopeContext = useMemo<ScopeTreeContext | null>(() => {
+    if (!rawFolders || !workspaceDocuments) return null
+    return {
+      folders: rawFolders
+        .filter((folder) => folder.kind === "user" && folder.visibility === "workspace")
+        .map((folder) => ({ id: folder.id, parent_folder_id: folder.parent_folder_id })),
+      docs: workspaceDocuments
+        .filter(
+          (doc) =>
+            doc.document_type == null ||
+            doc.document_type === "source" ||
+            doc.document_type === "page",
+        )
+        .map((doc) => ({ id: doc.id, folder_id: doc.folder_id ?? null })),
+      rootId: null,
+    }
+  }, [rawFolders, workspaceDocuments])
+  useEffect(() => {
+    if (!openDocumentId || !surfaceScopeContext || !layout) return
+    const document = surfaceScopeContext.docs.find((doc) => doc.id === openDocumentId)
+    if (!document) return
+    if (createScopeTreeView(activeSurfaceScope, surfaceScopeContext).docChecked(document.id)) {
+      return
+    }
+    const surface = portalSurfaceForDocument(
+      document,
+      currentScope,
+      layout.pages ?? [],
+      surfaceScopeContext,
+    )
+    if (surface === undefined || surface === activePageSlug) return
+    const query = surface ? `?${new URLSearchParams({ page: surface })}` : ""
+    window.history.replaceState(
+      null,
+      "",
+      `/knowledge/${encodeURIComponent(document.id)}${query}`,
+    )
+  }, [
+    activePageSlug,
+    activeSurfaceScope,
+    currentScope,
+    layout,
+    openDocumentId,
+    surfaceScopeContext,
+  ])
+
   const leaveGuard = useUnsavedChangesGuard({
     enabled: dirty,
     onSave: handleSave,
@@ -3509,8 +3649,25 @@ export function PortalBuilder({
 
                 <KnowledgeSubNav
                   className="mt-8"
+                  treeHeader={
+                    <PageSwitcher
+                      pages={layout.pages ?? []}
+                      homePosition={layout.homePosition}
+                      activeSlug={activePageSlug}
+                      disabled={saveState === "saving"}
+                      onChange={(slug) => void handlePageChange(slug)}
+                    />
+                  }
                   navProps={{
                     chrome: "builder",
+                    portalPageSlug: activePageSlug,
+                    portalPageScope: treeScope,
+                    promotedRootFolderIds: treePromotedRootIds,
+                    projectRootFolderId: treeRootFolderId,
+                    onSectionCreated: (folderId: string) =>
+                      addToActiveSurfaceScope(folderId),
+                    onRootDocumentCreated: (documentId: string) =>
+                      addToActiveSurfaceScope({ doc: documentId }),
                     searchQuery: documentSearchQuery,
                     onSearchQueryChange: setDocumentSearchQuery,
                     sortMode: documentSortMode,
@@ -3879,6 +4036,7 @@ export function PortalBuilder({
                 hasSelectedContent ? (
                   <PortalEditorFrameHeader
                     layout={layout}
+                    activePageSlug={activePageSlug}
                     previewSlug={previewSlug}
                     appearance={appearance}
                     onAppearanceChange={setAppearance}
@@ -3890,7 +4048,16 @@ export function PortalBuilder({
               contentSidebar={
                 hasOpenDocument ? (
                   <PortalEditorFrameSidebar
-                    layout={layout}
+                    layout={
+                      activePage && activePage.scope != null
+                        ? {
+                            ...layout,
+                            sidebar:
+                              activeDraft?.pageSidebars?.[activePage.slug] ??
+                              undefined,
+                          }
+                        : layout
+                    }
                     appearance={appearance}
                     activeDocumentId={openDocumentId}
                     onHoverDocument={handlePreviewHoverDocument}

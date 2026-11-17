@@ -9,10 +9,11 @@ import { DocumentsSubNav } from "@/components/app/documents-sub-nav"
 import { WorkspaceChangesCommitPanel } from "@/components/app/workspace-changes-commit-panel"
 import { WorkspaceChangesFileList } from "@/components/app/workspace-changes-file-list"
 import { useWorkspaceChanges } from "@/components/app/workspace-changes-context"
+import { documentSurfaceBase } from "@/lib/knowledge-route"
 
 type DocumentsNavProps = Omit<
   React.ComponentProps<typeof DocumentsSubNav>,
-  "routeRoot" | "projectSlug" | "portalPageSlug" | "portalPageScope"
+  "routeRoot" | "projectSlug"
 >
 
 /**
@@ -22,10 +23,13 @@ type DocumentsNavProps = Omit<
  */
 export function KnowledgeSubNav({
   navProps,
+  treeHeader,
   className,
 }: {
   /** Extra props for the document tree (search, sort, builder chrome). */
   navProps?: DocumentsNavProps
+  /** Rendered above the document tree (not the Changes view). */
+  treeHeader?: React.ReactNode
   className?: string
 } = {}): React.ReactElement {
   const pathname = usePathname()
@@ -36,9 +40,10 @@ export function KnowledgeSubNav({
     loading,
   } = useWorkspaceChanges()
 
+  // Preview (/knowledge) and Editor (/editor) each keep their own tabs.
+  const base = documentSurfaceBase(pathname) ?? "/knowledge"
   const showingChanges =
-    pathname === "/knowledge/changes" ||
-    pathname.startsWith("/knowledge/changes/")
+    pathname === `${base}/changes` || pathname.startsWith(`${base}/changes/`)
   const preparingDiff = loading && changedFileCount > 0 && !diff
 
   return (
@@ -50,7 +55,7 @@ export function KnowledgeSubNav({
           className="grid grid-cols-2 gap-1 rounded-lg bg-muted/50 p-1"
         >
           <Link
-            href="/knowledge"
+            href={base}
             role="tab"
             aria-selected={!showingChanges}
             className={cn(
@@ -63,7 +68,7 @@ export function KnowledgeSubNav({
             Documents
           </Link>
           <Link
-            href="/knowledge/changes"
+            href={`${base}/changes`}
             role="tab"
             data-tour="changes"
             aria-selected={showingChanges}
@@ -110,7 +115,13 @@ export function KnowledgeSubNav({
           <WorkspaceChangesFileList />
         </div>
       ) : (
-        <DocumentsSubNav {...navProps} routeRoot="knowledge" />
+        <>
+          {treeHeader ? <div className="shrink-0 pt-3">{treeHeader}</div> : null}
+          <DocumentsSubNav
+            {...navProps}
+            routeRoot={base === "/editor" ? "editor" : "knowledge"}
+          />
+        </>
       )}
     </div>
   )

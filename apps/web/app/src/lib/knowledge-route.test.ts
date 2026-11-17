@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   canOpenKnowledgeDocumentInPlace,
+  documentPathFrom,
   knowledgeDocumentIdFromPath,
   knowledgeDocumentPath,
   openKnowledgeDocumentInPlace,
@@ -53,5 +54,30 @@ describe("opening a document in place", () => {
     openKnowledgeDocumentInPlace(ID)
 
     expect(pushState).not.toHaveBeenCalled()
+  })
+})
+
+describe("Editor surface", () => {
+  afterEach(() => {
+    window.history.replaceState(null, "", "/")
+  })
+
+  it("reads document ids under /editor", () => {
+    expect(knowledgeDocumentIdFromPath(`/editor/${ID}`)).toBe(ID)
+    expect(knowledgeDocumentIdFromPath("/editor")).toBeNull()
+    expect(knowledgeDocumentIdFromPath("/editor/changes")).toBeNull()
+  })
+
+  it("keeps documents opened from Editor in Editor", () => {
+    expect(documentPathFrom("/editor", ID)).toBe(`/editor/${ID}`)
+    expect(documentPathFrom("/knowledge", ID)).toBe(`/knowledge/${ID}`)
+    expect(documentPathFrom("/settings/profile", ID)).toBe(`/knowledge/${ID}`)
+  })
+
+  it("opens in place within the current surface", () => {
+    window.history.replaceState(null, "", "/editor")
+    expect(canOpenKnowledgeDocumentInPlace("/editor", ID)).toBe(true)
+    openKnowledgeDocumentInPlace(ID)
+    expect(window.location.pathname).toBe(`/editor/${ID}`)
   })
 })

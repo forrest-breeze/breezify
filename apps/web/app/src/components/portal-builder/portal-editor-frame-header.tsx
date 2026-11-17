@@ -91,6 +91,7 @@ function interceptPortalLinks(
 
 export function PortalEditorFrameHeader({
   layout,
+  activePageSlug = null,
   previewSlug,
   appearance,
   onAppearanceChange,
@@ -98,6 +99,8 @@ export function PortalEditorFrameHeader({
   onOpenPage,
 }: {
   layout: PortalLayout
+  /** Page the open document belongs to; null is Documents (Home). */
+  activePageSlug?: string | null
   previewSlug: string
   appearance: PreviewAppearance
   onAppearanceChange: (appearance: PreviewAppearance) => void
@@ -116,6 +119,7 @@ export function PortalEditorFrameHeader({
         header={layout.header}
         pages={layout.pages ?? []}
         homePosition={layout.homePosition}
+        activePageSlug={activePageSlug}
         themeControl={{ mode: appearance, onChange: onAppearanceChange }}
         onNavigate={(href) => navigateFromFrame(href, nav)}
       />

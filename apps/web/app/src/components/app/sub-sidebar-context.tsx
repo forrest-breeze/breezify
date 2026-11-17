@@ -32,7 +32,9 @@ function deriveSection(pathname: string): string | null {
   if (section === "settings") {
     return segments[1] === "integrations" ? null : "settings"
   }
-  if (section === "knowledge" || section === "kb") return "knowledge"
+  if (section === "knowledge" || section === "editor" || section === "kb") {
+    return "knowledge"
+  }
   if (section === "reporting") return "reporting"
   return null
 }

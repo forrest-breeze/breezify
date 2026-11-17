@@ -48,6 +48,12 @@ interface DraftResponse {
   scope: PortalScopeEntry[] | null
   /** True when the draft has saved spec/scope changes not yet published. */
   divergedFromPublished: boolean
+  /**
+   * Nav rail for each page that curates its own docs, keyed by page slug, so
+   * the editor frame can show the open page's navigation. Pages that follow
+   * Home (null scope) use `spec.sidebar` and are omitted.
+   */
+  pageSidebars: Record<string, PortalLayout["sidebar"] | null>
 }
 
 function canManage(role: string): boolean {
@@ -95,6 +101,67 @@ function removeUnentitledLocalization(layout: PortalLayout): PortalLayout {
   return next
 }
 
+type WorkspaceRow = {
+  slug?: string | null
+  settings?: Record<string, unknown> | null
+} | null
+
+function draftSlug(draft: PortalExperienceRow, workspaceRow: WorkspaceRow): string {
+  return typeof draft.slug === "string" && draft.slug
+    ? draft.slug
+    : typeof workspaceRow?.slug === "string" && workspaceRow.slug
+      ? workspaceRow.slug
+      : "preview"
+}
+
+function normalizeDraftLayout(
+  slug: string,
+  layout: PortalLayout,
+  workspaceRow: WorkspaceRow,
+  taxonomy: Awaited<ReturnType<typeof getPublicTaxonomyFresh>>,
+  documents: Awaited<ReturnType<typeof getPublicDocumentsFresh>>,
+): PortalLayout {
+  return normalizePortalLayoutForPublicData({
+    slug,
+    layout,
+    taxonomy,
+    documents,
+    workspaceFooter: getKbFooter(workspaceRow?.settings),
+    workspaceHeader: buildWorkspaceHeaderDefaults({
+      websiteUrl: getLandingPageUrl(workspaceRow?.settings),
+      header: getKbHeader(workspaceRow?.settings),
+    }),
+    workspaceChromeScope: getPortalChromeScope(workspaceRow?.settings),
+  })
+}
+
+// Nav rail for each page that curates its own docs (see DraftResponse).
+async function draftPageSidebars(
+  workspaceId: string,
+  slug: string,
+  layout: PortalLayout,
+  workspaceRow: WorkspaceRow,
+): Promise<DraftResponse["pageSidebars"]> {
+  const curatedPages = (layout.pages ?? []).filter(
+    (page) => page.scope !== null && page.scope !== undefined,
+  )
+  return Object.fromEntries(
+    await Promise.all(
+      curatedPages.map(async (page) => {
+        const [taxonomy, documents] = await Promise.all([
+          getPublicTaxonomyFresh(workspaceId, page.scope),
+          getPublicDocumentsFresh(workspaceId, page.scope),
+        ])
+        return [
+          page.slug,
+          normalizeDraftLayout(slug, layout, workspaceRow, taxonomy, documents)
+            .sidebar ?? null,
+        ] as const
+      }),
+    ),
+  )
+}
+
 // Build the editor's DraftResponse from a draft row: validate the stored spec,
 // then normalize it against the project's (scoped) public taxonomy + documents so
 // the builder receives the same shape it renders. Shared by GET and DELETE.
@@ -123,33 +190,20 @@ async function buildDraftResponse(
       getPublicDocumentsFresh(workspaceId, draft.scope),
       draftDivergesFromPublished(workspaceId, draft),
     ])
-  const workspaceRow = rawWorkspaceRow as {
-    slug?: string | null
-    settings?: Record<string, unknown> | null
-  } | null
-  const slug =
-    typeof draft.slug === "string" && draft.slug
-      ? draft.slug
-      : typeof workspaceRow?.slug === "string" && workspaceRow.slug
-        ? workspaceRow.slug
-        : "preview"
+  const workspaceRow = rawWorkspaceRow as WorkspaceRow
+  const slug = draftSlug(draft, workspaceRow)
   const body: DraftResponse = {
     version: draft.version,
     projectSlug: draft.slug,
     scope: draft.scope,
     divergedFromPublished,
-    spec: normalizePortalLayoutForPublicData({
+    pageSidebars: await draftPageSidebars(
+      workspaceId,
       slug,
-      layout: validation.data,
-      taxonomy,
-      documents,
-      workspaceFooter: getKbFooter(workspaceRow?.settings),
-      workspaceHeader: buildWorkspaceHeaderDefaults({
-        websiteUrl: getLandingPageUrl(workspaceRow?.settings),
-        header: getKbHeader(workspaceRow?.settings),
-      }),
-      workspaceChromeScope: getPortalChromeScope(workspaceRow?.settings),
-    }),
+      validation.data,
+      workspaceRow,
+    ),
+    spec: normalizeDraftLayout(slug, validation.data, workspaceRow, taxonomy, documents),
   }
   return NextResponse.json(body)
 }
@@ -290,14 +344,27 @@ export async function PUT(request: Request): Promise<NextResponse> {
       projectSlug,
       user.id,
     )
+    const { data: rawWorkspaceRow } = await supabase
+      .from("workspaces")
+      .select("slug, settings")
+      .eq("id", workspace.workspace_id)
+      .maybeSingle()
+    const workspaceRow = rawWorkspaceRow as WorkspaceRow
+    const [divergedFromPublished, pageSidebars] = await Promise.all([
+      draftDivergesFromPublished(workspace.workspace_id, saved),
+      draftPageSidebars(
+        workspace.workspace_id,
+        draftSlug(saved, workspaceRow),
+        spec,
+        workspaceRow,
+      ),
+    ])
     const body: DraftResponse = {
       version: saved.version,
       projectSlug: saved.slug,
       scope: saved.scope,
-      divergedFromPublished: await draftDivergesFromPublished(
-        workspace.workspace_id,
-        saved,
-      ),
+      divergedFromPublished,
+      pageSidebars,
       spec,
     }
     return NextResponse.json(body)

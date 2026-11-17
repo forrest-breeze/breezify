@@ -10,6 +10,7 @@ import {
   useState,
 } from "react"
 import { usePathname } from "next/navigation"
+import { documentSurfaceBase } from "@/lib/knowledge-route"
 import useSWR, { useSWRConfig } from "swr"
 import {
   isGithubHostedDocsPublishStatusKey,
@@ -112,8 +113,7 @@ export function WorkspaceChangesProvider({
   children: React.ReactNode
 }): React.ReactElement {
   const pathname = usePathname()
-  const enabled =
-    pathname === "/knowledge" || pathname.startsWith("/knowledge/")
+  const enabled = documentSurfaceBase(pathname) !== null
   const { data: workspace } = useWorkspace()
   const {
     data: hostedDocs,

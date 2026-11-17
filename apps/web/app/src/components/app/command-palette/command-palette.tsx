@@ -1,5 +1,6 @@
 "use client"
 
+import { documentPathFrom } from "@/lib/knowledge-route"
 import React, {
   useCallback,
   useEffect,
@@ -250,7 +251,7 @@ export function CommandPalette(): React.JSX.Element {
         query,
       })
       handleClose()
-      router.push(`/knowledge/${id}`)
+      router.push(documentPathFrom(window.location.pathname, id))
     },
     [handleClose, query, router],
   )

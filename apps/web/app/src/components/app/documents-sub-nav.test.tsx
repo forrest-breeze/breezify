@@ -313,6 +313,85 @@ describe("DocumentsSubNav loading state", () => {
     expect(screen.getByText("Getting started")).toBeInTheDocument()
   })
 
+  it("keeps a Docs-named root as its own folder in the workspace-wide Knowledge tree", () => {
+    hoisted.pathname = "/knowledge"
+    hoisted.documentsLoading = false
+    hoisted.foldersLoading = false
+    hoisted.documentsData = []
+    const folder = (id: string, display_name: string, parent_folder_id: string | null) => ({
+      id,
+      name: id,
+      display_name,
+      kind: "user",
+      parent_folder_id,
+      visibility: "workspace",
+      required_role: null,
+      document_count: 0,
+      last_seen_at: "2026-07-08T00:00:00.000Z",
+      updated_at: "2026-07-08T00:00:00.000Z",
+    })
+    hoisted.foldersData = [
+      folder("docs-root", "Breeze Docs", null),
+      folder("guide", "Core Integration Guide", "docs-root"),
+      folder("api-root", "Breeze API Reference", null),
+    ]
+
+    render(<DocumentsSubNav chrome="builder" routeRoot="knowledge" />)
+
+    expect(screen.getByText("Breeze Docs")).toBeInTheDocument()
+    expect(screen.getByText("Breeze API Reference")).toBeInTheDocument()
+    expect(screen.queryByText("Core Integration Guide")).not.toBeInTheDocument()
+  })
+
+  it("shows only Home's included docs when the tree follows Documents", () => {
+    hoisted.pathname = "/knowledge"
+    hoisted.documentsLoading = false
+    hoisted.foldersLoading = false
+    const doc = (id: string, title: string, folder_id: string) => ({
+      id,
+      title,
+      source: "Manual",
+      folder_id,
+      created_at: "2026-07-08T00:00:00.000Z",
+      updated_at: "2026-07-08T00:00:00.000Z",
+    })
+    hoisted.documentsData = [
+      doc("guide-doc", "Quickstart", "guide"),
+      doc("api-doc", "Create a payment", "api-root"),
+    ]
+    const folder = (id: string, display_name: string, parent_folder_id: string | null) => ({
+      id,
+      name: id,
+      display_name,
+      kind: "user",
+      parent_folder_id,
+      visibility: "workspace",
+      required_role: null,
+      document_count: 1,
+      last_seen_at: "2026-07-08T00:00:00.000Z",
+      updated_at: "2026-07-08T00:00:00.000Z",
+    })
+    hoisted.foldersData = [
+      folder("docs-root", "Breeze Docs", null),
+      folder("guide", "Core Integration Guide", "docs-root"),
+      folder("api-root", "Breeze API Reference", null),
+    ]
+
+    render(
+      <DocumentsSubNav
+        chrome="builder"
+        routeRoot="knowledge"
+        portalPageScope={[{ id: "docs-root", promote: true, rootOnly: false }]}
+        promotedRootFolderIds={new Set(["docs-root"])}
+        projectRootFolderId="docs-root"
+      />,
+    )
+
+    expect(screen.getByText("Core Integration Guide")).toBeInTheDocument()
+    expect(screen.queryByText("Breeze Docs")).not.toBeInTheDocument()
+    expect(screen.queryByText("Breeze API Reference")).not.toBeInTheDocument()
+  })
+
   it("shows only the selected portal page's folders and documents", () => {
     hoisted.pathname = "/kb"
     hoisted.documentsLoading = false

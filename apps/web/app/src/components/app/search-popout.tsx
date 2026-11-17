@@ -1,5 +1,6 @@
 "use client"
 
+import { documentPathFrom } from "@/lib/knowledge-route"
 import {
   useState,
   useEffect,
@@ -212,7 +213,7 @@ export function SearchPopout({ open, onClose }: SearchPopoutProps): React.JSX.El
         query,
       })
       onClose()
-      router.push(`/knowledge/${id}`)
+      router.push(documentPathFrom(window.location.pathname, id))
     },
     [onClose, query, router],
   )

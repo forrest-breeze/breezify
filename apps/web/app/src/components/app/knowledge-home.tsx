@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import {
   ArrowRight,
   FilePlus2,
@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useDocumentHome, useFolders } from "@/hooks/swr"
 import { useHasHydrated } from "@/hooks/use-has-hydrated"
 import { cn, formatRelativeTime } from "@/lib/utils"
+import { documentPathFrom } from "@/lib/knowledge-route"
 
 function DocumentCard({
   document,
@@ -32,9 +33,10 @@ function DocumentCard({
   }
   folderName?: string
 }): React.ReactElement {
+  const pathname = usePathname()
   return (
     <HoverPrefetchLink
-      href={`/knowledge/${document.id}`}
+      href={documentPathFrom(pathname, document.id)}
       className={cn(
         "group flex min-h-56 flex-col rounded-2xl border border-border/70 bg-card p-5",
         "shadow-[0_1px_2px_rgb(0_0_0/0.025)] transition-all duration-200",
@@ -112,6 +114,7 @@ function HomeSkeleton(): React.ReactElement {
 
 export function KnowledgeHome(): React.ReactElement {
   const router = useRouter()
+  const pathname = usePathname()
   const { data: liveData, error: liveError, isLoading, mutate } = useDocumentHome()
   const { data: liveFolderData } = useFolders()
   const [creating, setCreating] = useState(false)
@@ -156,7 +159,7 @@ export function KnowledgeHome(): React.ReactElement {
       if (!response.ok) throw new Error(`Create failed: ${response.status}`)
       const created = (await response.json()) as { id: string }
       void mutate()
-      router.push(`/knowledge/${created.id}`)
+      router.push(documentPathFrom(pathname, created.id))
     } catch (error) {
       console.error("[Breezify] Failed to create document:", error)
       setCreateError(true)

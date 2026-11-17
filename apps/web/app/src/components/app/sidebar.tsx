@@ -19,7 +19,6 @@ import {
   ChevronLeft,
   Search,
   Lock,
-  FileText,
   Compass,
 } from "lucide-react"
 // Primary navigation icons use Phosphor (duotone) to give the app a
@@ -28,6 +27,8 @@ import {
   IconContext,
   GearSix,
   ChartLineUp,
+  Eye,
+  PencilSimple,
   Plugs,
 } from "@phosphor-icons/react"
 import { cn } from "@/lib/utils"
@@ -58,7 +59,10 @@ import { SearchPopout } from "@/components/app/search-popout"
 import { ProductTourProvider, useProductTour } from "@/components/app/product-tour"
 import { WorkspaceRealtimeSync } from "@/components/app/workspace-realtime-sync"
 import { WorkspaceSwitchProvider, useWorkspaceSwitch } from "@/components/app/workspace-switch-context"
-import { useKnowledgeBuilderActive } from "@/components/app/knowledge-portal-access"
+import {
+  canManageKnowledgePortal,
+  useKnowledgeBuilderActive,
+} from "@/components/app/knowledge-portal-access"
 import { WorkspaceChangesProvider } from "@/components/app/workspace-changes-context"
 
 // Each sub-navigation owns a substantial, route-specific client graph. Keep
@@ -101,11 +105,19 @@ const navigationSections: NavSection[] = [
     label: "Knowledge base",
     items: [
       {
-        label: "Knowledge",
+        // The portal builder: each portal page's docs beside a live preview.
+        label: "Preview",
         href: "/knowledge",
-        icon: FileText,
+        icon: Eye,
         subSidebarSection: "knowledge",
         tourId: "knowledge",
+      },
+      {
+        // Every workspace document, edited without the portal preview.
+        label: "Editor",
+        href: "/editor",
+        icon: PencilSimple,
+        subSidebarSection: "knowledge",
       },
       {
         label: "Analytics",
@@ -174,7 +186,16 @@ function NavLinks({ onNavigate, isMinimized }: { onNavigate?: () => void, isMini
     )
   }
 
-  const visibleNavigationSections = navigationSections
+  // Preview is the portal builder, so it is only listed for members who can
+  // manage the portal; everyone else works in Editor. Before hydration both
+  // show so the first client render matches the server HTML.
+  const canPreview = !hasHydrated || canManageKnowledgePortal(currentWorkspace)
+  const visibleNavigationSections = navigationSections.map((section) => ({
+    ...section,
+    items: section.items.filter(
+      (item) => item.href !== "/knowledge" || canPreview,
+    ),
+  }))
 
   return (
     <IconContext.Provider value={{ weight: "duotone" }}>
@@ -584,7 +605,10 @@ function SubSidebarContent() {
     if (knowledgeBuilderActive) return null
 
     return (
-      <SubSidebar title="Knowledge" scrollContent={false}>
+      <SubSidebar
+        title={pathname.startsWith("/editor") ? "Editor" : "Knowledge"}
+        scrollContent={false}
+      >
         <Suspense>
           <KnowledgeSubNav />
         </Suspense>
@@ -665,7 +689,7 @@ function MobileSubSidebarContent({ open, onOpenChange }: { open: boolean; onOpen
 
     return (
       <MobileSubSidebar
-        title="Knowledge"
+        title={pathname.startsWith("/editor") ? "Editor" : "Knowledge"}
         scrollContent={false}
         open={open}
         onOpenChange={onOpenChange}

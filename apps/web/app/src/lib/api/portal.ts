@@ -16,6 +16,8 @@ export interface PortalDraftResult {
   scope: PortalScopeEntry[] | null
   /** True when the draft has saved spec/scope changes not yet published. */
   divergedFromPublished?: boolean
+  /** Nav rail per page with its own docs, keyed by page slug. */
+  pageSidebars?: Record<string, PortalLayout["sidebar"] | null>
 }
 
 export interface PortalProjectResult {
