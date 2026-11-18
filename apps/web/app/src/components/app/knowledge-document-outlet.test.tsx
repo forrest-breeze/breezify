@@ -30,6 +30,7 @@ vi.mock("@/hooks/swr", () => ({
 }))
 
 import { KnowledgeDocumentOutlet } from "./knowledge-document-outlet"
+import { DocumentSwitchReporterContext } from "./document-switch-progress"
 
 function renderOutlet() {
   return render(
@@ -82,6 +83,33 @@ describe("KnowledgeDocumentOutlet", () => {
     )
     expect(screen.getByTestId("editor").textContent).toBe(B)
     expect(screen.queryByRole("progressbar")).toBeNull()
+  })
+
+  it("hands the progress bar to a host surface that reports switching", () => {
+    const report = vi.fn()
+    const tree = () => (
+      <DocumentSwitchReporterContext.Provider value={report}>
+        <KnowledgeDocumentOutlet>
+          <p>server page</p>
+        </KnowledgeDocumentOutlet>
+      </DocumentSwitchReporterContext.Provider>
+    )
+    state.pathname = `/knowledge/${A}`
+    state.loaded.add(A)
+    const view = render(tree())
+
+    state.pathname = `/knowledge/${B}`
+    view.rerender(tree())
+    expect(screen.getByTestId("editor").textContent).toBe(A)
+    expect(screen.queryByRole("progressbar")).toBeNull()
+    expect(report).toHaveBeenLastCalledWith(true)
+
+    state.loaded.add(B)
+    view.rerender(tree())
+    expect(report).toHaveBeenLastCalledWith(false)
+
+    view.unmount()
+    expect(report).toHaveBeenLastCalledWith(false)
   })
 
   it("swaps immediately to a document that is already cached", () => {

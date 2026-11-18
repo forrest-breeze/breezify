@@ -161,6 +161,7 @@ import type {
 } from "./portal-live-preview"
 import { portalDocRefFromHref } from "./portal-live-preview"
 import type { SidebarGroup } from "@/lib/portal/schema"
+import { DocumentSwitchReporterContext } from "@/components/app/document-switch-progress"
 import {
   canOpenKnowledgeDocumentInPlace,
   openKnowledgeDocumentInPlace,
@@ -2332,6 +2333,9 @@ export function PortalBuilder({
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  // Set by the document outlet while it swaps documents; the bar is drawn
+  // inside the preview frame rather than at the top of the window.
+  const [documentSwitching, setDocumentSwitching] = useState(false)
   const { mutate: mutateGlobal } = useSWRConfig()
   const { data: workspace, mutate: mutateWorkspace } = useWorkspace()
   const portalEditorEnabled = workspace?.portal_editor_enabled === true
@@ -4028,10 +4032,13 @@ export function PortalBuilder({
                     mobile={device === "mobile"}
                     allowPoweredByRemoval={workspace?.portal_branding_removal_enabled === true}
                   >
-                    {children}
+                    <DocumentSwitchReporterContext.Provider value={setDocumentSwitching}>
+                      {children}
+                    </DocumentSwitchReporterContext.Provider>
                   </PortalEditorDocument>
                 </PortalEditorExitProvider>
               ) : hasSelectedContent ? children : undefined}
+              contentLoading={hasOpenDocument && documentSwitching}
               contentHeader={
                 hasSelectedContent ? (
                   <PortalEditorFrameHeader

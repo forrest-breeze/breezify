@@ -76,6 +76,8 @@ interface PortalLivePreviewProps {
    * device switch stay put so editing never feels like leaving the preview.
    */
   content?: React.ReactNode
+  /** True while `content` is swapping to another document; shows the progress bar. */
+  contentLoading?: boolean
   /** Portal chrome drawn above `content` inside the frame. */
   contentHeader?: React.ReactNode
   /** Portal nav rail drawn beside `content` inside the frame. */
@@ -234,6 +236,7 @@ export function PortalLivePreview({
   onPageChange,
   actions,
   content,
+  contentLoading = false,
   contentHeader,
   contentSidebar,
   onOpenDocument,
@@ -538,9 +541,9 @@ export function PortalLivePreview({
                 surface={surface}
               />
             )}
-            {showReloadBar && (
+            {(showReloadBar || (editing && contentLoading)) && (
               <LoadingBar
-                label="Updating portal preview"
+                label={showReloadBar ? "Updating portal preview" : "Opening document"}
                 className="delayed-reveal pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5 rounded-none bg-transparent"
               />
             )}

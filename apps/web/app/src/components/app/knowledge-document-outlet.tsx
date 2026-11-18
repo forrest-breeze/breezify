@@ -1,11 +1,12 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import dynamic from "next/dynamic"
 import { usePathname } from "next/navigation"
 import { useSWRConfig } from "swr"
 import DocumentLoading from "@/app/(app)/knowledge/[id]/loading"
 import { LoadingBar } from "@/components/ui/loading-bar"
+import { useDocumentSwitchReporter } from "@/components/app/document-switch-progress"
 import { useDocument } from "@/hooks/swr"
 import { knowledgeDocumentIdFromPath } from "@/lib/knowledge-route"
 
@@ -63,13 +64,21 @@ export function KnowledgeDocumentOutlet({
     setShownId(targetId)
   }
 
-  if (!targetId) return <>{children}</>
-
   const displayedId = shownId ?? targetId
-  const switching = displayedId !== targetId
+  const switching = targetId !== null && displayedId !== targetId
+
+  // A host surface (Preview) draws the bar inside its own frame.
+  const reportSwitching = useDocumentSwitchReporter()
+  useEffect(() => {
+    reportSwitching?.(switching)
+  }, [reportSwitching, switching])
+  useEffect(() => () => reportSwitching?.(false), [reportSwitching])
+
+  if (!targetId || !displayedId) return <>{children}</>
+
   return (
     <>
-      {switching ? (
+      {switching && !reportSwitching ? (
         <LoadingBar
           label="Opening document"
           className="delayed-reveal pointer-events-none fixed inset-x-0 top-0 z-50 rounded-none bg-transparent"
