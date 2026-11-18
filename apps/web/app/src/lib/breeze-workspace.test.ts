@@ -142,4 +142,20 @@ describe("ensureBreezeWorkspaceMember", () => {
       expect.objectContaining({ id: "m", status: "active", role: "viewer" }),
     ])
   })
+
+  it("never re-adds or reactivates a deactivated member", async () => {
+    const { client, db } = fakeAdmin({
+      workspaces: [{ id: "ws", slug: BREEZE_WORKSPACE_SLUG, created_at: "2026-01-01T00:00:00Z" }],
+      workspace_members: [
+        { id: "m", workspace_id: "ws", user_id: "u1", role: "editor", status: "deactivated" },
+      ],
+    })
+
+    const result = await ensureBreezeWorkspaceMember(client, "u1")
+
+    expect(result).toEqual({ workspaceId: "ws", joined: false, deactivated: true })
+    expect(db.workspace_members).toEqual([
+      expect.objectContaining({ id: "m", status: "deactivated" }),
+    ])
+  })
 })

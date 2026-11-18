@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { countActiveMembers, getActiveWorkspace } from "@/lib/db/workspace";
-import { getWorkspaceSubscription } from "@/lib/db/subscription";
-import { PLAN_MEMBER_LIMITS, resolveEntitlementPlanId } from "@/lib/billing/catalog";
+import { getActiveWorkspace } from "@/lib/db/workspace";
 import { sendInviteEmail } from "@/lib/email";
 import {
   emailSchema,
@@ -15,6 +13,10 @@ import {
 import type { TeamMember } from "@/lib/types";
 import { WorkspaceRole, canManageRole } from "@breezify/core";
 import { requireRouteUser } from "@/lib/auth/route-auth";
+import { hasWorkspaceRole } from "@/lib/auth/workspace-role";
+
+// Member management (invite, change role, deactivate) is for admins and
+// owners only. Everyone can list members.
 
 const postBodySchema = z.object({
   email: emailSchema,
@@ -27,17 +29,20 @@ const putBodySchema = z.object({
   role: roleEnum,
 });
 
+const patchBodySchema = z.object({
+  member_id: z.string().uuid(),
+  status: z.enum(["active", "deactivated"]),
+});
+
 const deleteQuerySchema = z.object({
   id: z.string().uuid(),
 });
 
-/**
- * Returns the max active members for a workspace, or `null` if the workspace
- * is on a plan without a member cap (business, enterprise).
- */
-async function getWorkspaceMemberLimit(workspaceId: string): Promise<number | null> {
-  const subscription = await getWorkspaceSubscription(workspaceId);
-  return PLAN_MEMBER_LIMITS[resolveEntitlementPlanId(subscription)];
+function adminsOnly(action: string): NextResponse {
+  return NextResponse.json(
+    { error: `Only workspace admins can ${action}`, code: "insufficient_role" },
+    { status: 403 },
+  );
 }
 
 export async function GET(): Promise<NextResponse> {
@@ -156,11 +161,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const membership = await getActiveWorkspace(supabase, user.id);
 
-  if (!membership || !canManageRole(membership.role as WorkspaceRole, "editor")) {
-    return NextResponse.json(
-      { error: "Only editors and above can invite members" },
-      { status: 403 }
-    );
+  if (!membership || !hasWorkspaceRole(membership.role, "admin")) {
+    return adminsOnly("invite members");
   }
 
   const parsed = await safeJsonBody(request, postBodySchema);
@@ -172,21 +174,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { error: "You cannot invite members to a role higher than your own" },
       { status: 403 }
     );
-  }
-
-  const memberLimit = await getWorkspaceMemberLimit(membership.workspace_id);
-  if (memberLimit !== null) {
-    const currentMembers = await countActiveMembers(membership.workspace_id);
-    if (currentMembers >= memberLimit) {
-      return NextResponse.json(
-        {
-          error: `This workspace is limited to ${memberLimit} active members.`,
-          code: "member_limit_reached",
-          memberLimit,
-        },
-        { status: 402 }
-      );
-    }
   }
 
   // Check if a profile with that email exists
@@ -229,7 +216,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         { status: 409 }
       );
     }
-    
+
+    if (existing.status === "deactivated") {
+      return NextResponse.json(
+        { error: "This person was deactivated. Reactivate them from the members list instead." },
+        { status: 409 }
+      );
+    }
+
     // If resend is NOT explicitly requested, return conflict
     if (!resend) {
       return NextResponse.json(
@@ -342,11 +336,8 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
 
   const userMembership = await getActiveWorkspace(supabase, user.id);
 
-  if (!userMembership || !canManageRole(userMembership.role as WorkspaceRole, "editor")) {
-    return NextResponse.json(
-      { error: "Only editors and above can update member roles" },
-      { status: 403 }
-    );
+  if (!userMembership || !hasWorkspaceRole(userMembership.role, "admin")) {
+    return adminsOnly("change member roles");
   }
 
   const parsed = await safeJsonBody(request, putBodySchema);
@@ -364,7 +355,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
 
   const { data: targetMember } = await adminClient
     .from("workspace_members")
-    .select("role")
+    .select("id, role, status")
     .eq("id", member_id)
     .eq("workspace_id", userMembership.workspace_id)
     .single();
@@ -380,10 +371,22 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // Changing your own role could leave the workspace without an owner or
+  // admin; ownership moves only by transferring it to someone else.
+  if (targetMember.id === userMembership.id) {
+    return NextResponse.json({ error: "You cannot change your own role" }, { status: 400 });
+  }
+
   // Handle ownership transfer
   if (role === "owner") {
     if (userMembership.role !== "owner") {
       return NextResponse.json({ error: "Only the workspace owner can transfer ownership" }, { status: 403 });
+    }
+    if (targetMember.status !== "active") {
+      return NextResponse.json(
+        { error: "Ownership can only be transferred to an active member" },
+        { status: 400 }
+      );
     }
 
     // Demote current owner to admin
@@ -423,11 +426,8 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
 
   const userMembership = await getActiveWorkspace(supabase, user.id);
 
-  if (!userMembership || !canManageRole(userMembership.role as WorkspaceRole, "editor")) {
-    return NextResponse.json(
-      { error: "Only editors and above can remove members" },
-      { status: 403 }
-    );
+  if (!userMembership || !hasWorkspaceRole(userMembership.role, "admin")) {
+    return adminsOnly("remove members");
   }
 
   const parsedQuery = safeSearchParams(request.nextUrl, deleteQuerySchema);
@@ -439,7 +439,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
   // Prevent admins from removing themselves
   const { data: target } = await adminClient
     .from("workspace_members")
-    .select("id, user_id, role")
+    .select("id, user_id, role, status")
     .eq("id", memberId)
     .eq("workspace_id", userMembership.workspace_id)
     .single();
@@ -465,11 +465,21 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const { error } = await adminClient
-    .from("workspace_members")
-    .delete()
-    .eq("id", memberId)
-    .eq("workspace_id", userMembership.workspace_id);
+  // A pending invite is just deleted. Anyone who has joined is deactivated
+  // instead: deleting their row would let the Breeze auto-join
+  // (lib/breeze-workspace.ts) re-add them as an editor on their next visit.
+  const { error } =
+    target.status === "invited"
+      ? await adminClient
+          .from("workspace_members")
+          .delete()
+          .eq("id", memberId)
+          .eq("workspace_id", userMembership.workspace_id)
+      : await adminClient
+          .from("workspace_members")
+          .update({ status: "deactivated" })
+          .eq("id", memberId)
+          .eq("workspace_id", userMembership.workspace_id);
 
   if (error) {
     console.error("[Breezify] Failed to remove member:", error.message);
@@ -479,5 +489,75 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({
+    success: true,
+    status: target.status === "invited" ? "removed" : "deactivated",
+  });
+}
+
+/** PATCH /api/team: deactivate or reactivate a member. Admins and owners only. */
+export async function PATCH(request: NextRequest): Promise<NextResponse> {
+  const supabase = await createClient();
+
+  const { user, response: authResponse } = await requireRouteUser(supabase);
+
+  if (!user) {
+    return authResponse;
+  }
+
+  const userMembership = await getActiveWorkspace(supabase, user.id);
+
+  if (!userMembership || !hasWorkspaceRole(userMembership.role, "admin")) {
+    return adminsOnly("deactivate or reactivate members");
+  }
+
+  const parsed = await safeJsonBody(request, patchBodySchema);
+  if (!parsed.ok) return parsed.response;
+  const { member_id, status } = parsed.data;
+
+  const adminClient = createAdminClient();
+
+  const { data: target } = await adminClient
+    .from("workspace_members")
+    .select("id, user_id, role, status")
+    .eq("id", member_id)
+    .eq("workspace_id", userMembership.workspace_id)
+    .single();
+
+  if (!target) {
+    return NextResponse.json({ error: "Member not found" }, { status: 404 });
+  }
+
+  if (target.user_id === user.id) {
+    return NextResponse.json({ error: "You cannot change your own status" }, { status: 400 });
+  }
+
+  if (!canManageRole(userMembership.role as WorkspaceRole, target.role as WorkspaceRole)) {
+    return NextResponse.json(
+      { error: "You cannot change a member who has a higher role than your own" },
+      { status: 403 }
+    );
+  }
+
+  if (target.status === "invited") {
+    return NextResponse.json(
+      { error: "This invite is still pending. Remove it instead." },
+      { status: 400 }
+    );
+  }
+
+  const { data, error } = await adminClient
+    .from("workspace_members")
+    .update({ status })
+    .eq("id", member_id)
+    .eq("workspace_id", userMembership.workspace_id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("[Breezify] Failed to update member status:", error.message);
+    return NextResponse.json({ error: "Failed to update member" }, { status: 500 });
+  }
+
+  return NextResponse.json(data);
 }

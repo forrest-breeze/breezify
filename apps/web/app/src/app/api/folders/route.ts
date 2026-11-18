@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveWorkspace } from "@/lib/db/workspace";
+import { requireWorkspaceRole } from "@/lib/auth/workspace-role";
 import { safeJsonBody, slugSchema } from "@/lib/validation";
 import type { FolderVisibility, WorkspaceMemberRole } from "@/lib/types";
 import { requireRouteUser } from "@/lib/auth/route-auth";
@@ -185,6 +186,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 404 },
     );
   }
+
+  const denied = requireWorkspaceRole(workspace.role, "editor");
+  if (denied) return denied;
 
   const parsed = await safeJsonBody(request, postBodySchema);
   if (!parsed.ok) return parsed.response;

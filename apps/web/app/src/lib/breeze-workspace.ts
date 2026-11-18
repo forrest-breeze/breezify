@@ -12,7 +12,8 @@ import { normalizeWorkspaceSettings } from "@/lib/workspace-settings";
 // the first time a (Breeze-only, see auth/allowed-email.ts) user reaches the
 // app, they are added to it. The very first user creates it and becomes its
 // owner; everyone after joins as an editor. Owners/admins can change roles in
-// Settings -> Members as usual.
+// Settings -> Members, and deactivate people there (a deactivated member is
+// never re-added; see ensureBreezeWorkspaceMember).
 // ---------------------------------------------------------------------------
 
 export const BREEZE_WORKSPACE_SLUG = "breeze";
@@ -88,7 +89,7 @@ async function createBreezeWorkspace(admin: SupabaseClient): Promise<WorkspaceRo
 export async function ensureBreezeWorkspaceMember(
   admin: SupabaseClient,
   userId: string,
-): Promise<{ workspaceId: string; joined: boolean }> {
+): Promise<{ workspaceId: string; joined: boolean; deactivated: boolean }> {
   let workspace = await findBreezeWorkspace(admin);
 
   if (workspace) {
@@ -99,14 +100,21 @@ export async function ensureBreezeWorkspaceMember(
       .eq("user_id", userId)
       .maybeSingle();
     if (error) throw new Error(`[breeze-workspace] membership: ${error.message}`);
-    if (member?.status === "active") return { workspaceId: workspace.id, joined: false };
+    if (member?.status === "active") {
+      return { workspaceId: workspace.id, joined: false, deactivated: false };
+    }
+    // An admin removed this person. Never re-add them automatically; only an
+    // admin reactivating the row in Settings -> Members restores access.
+    if (member?.status === "deactivated") {
+      return { workspaceId: workspace.id, joined: false, deactivated: true };
+    }
     if (member) {
       const { error: activateError } = await admin
         .from("workspace_members")
         .update({ status: "active" })
         .eq("id", member.id);
       if (activateError) throw new Error(`[breeze-workspace] activate: ${activateError.message}`);
-      return { workspaceId: workspace.id, joined: true };
+      return { workspaceId: workspace.id, joined: true, deactivated: false };
     }
   }
 
@@ -129,7 +137,7 @@ export async function ensureBreezeWorkspaceMember(
     throw new Error(`[breeze-workspace] join: ${insertError.message}`);
   }
 
-  return { workspaceId: workspace.id, joined: true };
+  return { workspaceId: workspace.id, joined: true, deactivated: false };
 }
 
 // profiles.onboarding_completed_at is left null on join: it now means "has

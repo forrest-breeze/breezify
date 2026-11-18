@@ -2,10 +2,7 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { PLAN_MEMBER_LIMITS, resolveEntitlementPlanId } from "@/lib/billing/catalog";
-import { getWorkspaceSubscription } from "@/lib/db/subscription";
 import { markProspectWorkspaceConverted } from "@/lib/db/prospect";
-import { countActiveMembers } from "@/lib/db/workspace";
 import { getPostHogClient } from "@/lib/posthog-server";
 import { getAllowedDomains } from "@/lib/workspace-settings";
 import { safeJsonBody, safeSearchParams } from "@/lib/validation";
@@ -24,11 +21,6 @@ const postBodySchema = z
 const putBodySchema = z.object({ invite_id: z.string().uuid() });
 
 const deleteQuerySchema = z.object({ id: z.string().uuid() });
-
-async function getWorkspaceMemberLimit(workspaceId: string): Promise<number | null> {
-  const subscription = await getWorkspaceSubscription(workspaceId);
-  return PLAN_MEMBER_LIMITS[resolveEntitlementPlanId(subscription)];
-}
 
 /** GET — find workspaces the user can join (domain match) and pending invites. */
 export async function GET(): Promise<NextResponse> {
@@ -208,34 +200,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     .eq("user_id", user.id)
     .maybeSingle();
 
-  const [
-    memberLimit,
-    currentMembers,
-    { data: existing },
-  ] = await Promise.all([
-    getWorkspaceMemberLimit(resolvedWorkspaceId),
-    countActiveMembers(resolvedWorkspaceId),
-    existingMembershipQuery,
-  ]);
+  const { data: existing } = await existingMembershipQuery;
 
-  // Existing active members should not be blocked by plan downgrades.
+  // An admin deactivated this person; an invite link must not undo that.
+  if (existing?.status === "deactivated") {
+    return NextResponse.json(
+      { error: "Your access to this workspace was removed by an admin." },
+      { status: 403 }
+    );
+  }
+
   if (existing && existing.status !== "invited" && existing.status !== "expired") {
     return NextResponse.json(
       { error: "Already a member of this workspace" },
       { status: 409 }
-    );
-  }
-
-  // Enforce member cap for the workspace's current plan before creating a new
-  // active membership or promoting a pending/expired invite.
-  if (memberLimit !== null && currentMembers >= memberLimit) {
-    return NextResponse.json(
-      {
-        error: `This workspace has reached its member limit (${memberLimit}).`,
-        code: "member_limit_reached",
-        memberLimit,
-      },
-      { status: 402 }
     );
   }
 
@@ -359,24 +337,6 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
 
   if (invite.status !== "invited") {
     return NextResponse.json({ error: "Invite is no longer pending" }, { status: 409 });
-  }
-
-  // Enforce member cap before promoting the pending invite. A pending invite
-  // is not counted as an active member, so accepting it increments the active
-  // count and must respect the plan's member limit — mirrors the POST handler.
-  const memberLimit = await getWorkspaceMemberLimit(invite.workspace_id);
-  if (memberLimit !== null) {
-    const currentMembers = await countActiveMembers(invite.workspace_id);
-    if (currentMembers >= memberLimit) {
-      return NextResponse.json(
-        {
-          error: `This workspace has reached its member limit (${memberLimit}).`,
-          code: "member_limit_reached",
-          memberLimit,
-        },
-        { status: 402 }
-      );
-    }
   }
 
   const { error } = await admin

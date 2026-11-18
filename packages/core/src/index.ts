@@ -533,7 +533,7 @@ export interface WorkspaceMemberRow {
   workspace_id: string;
   user_id: string | null;
   role: WorkspaceRole;
-  status: "active" | "invited" | "expired";
+  status: "active" | "invited" | "expired" | "deactivated";
   profile_role?: string | null;
   invited_email: string | null;
   created_at: string;
@@ -556,7 +556,7 @@ export interface TeamMember {
   member_id: string;
   user_id: string | null;
   workspace_role: WorkspaceRole;
-  member_status: "active" | "invited" | "expired";
+  member_status: "active" | "invited" | "expired" | "deactivated";
   display_name: string | null;
   email: string | null;
   avatar_url: string | null;

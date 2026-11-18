@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getActiveWorkspace } from "@/lib/db/workspace";
+import { requireWorkspaceRole } from "@/lib/auth/workspace-role";
 import { generateEmbedding } from "@/lib/embeddings";
 import { safeJsonBody, safeRouteParams, slugSchema, uuidParamSchema } from "@/lib/validation";
 import type {
@@ -287,6 +288,9 @@ export async function PATCH(
     );
   }
 
+  const denied = requireWorkspaceRole(workspace.role, "editor");
+  if (denied) return denied;
+
   const parsedParams = safeRouteParams(await params, uuidParamSchema);
   if (!parsedParams.ok) return parsedParams.response;
   const { id } = parsedParams.data;
@@ -517,6 +521,9 @@ export async function DELETE(
       { status: 404 },
     );
   }
+
+  const denied = requireWorkspaceRole(workspace.role, "editor");
+  if (denied) return denied;
 
   const parsedParams = safeRouteParams(await params, uuidParamSchema);
   if (!parsedParams.ok) return parsedParams.response;

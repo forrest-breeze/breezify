@@ -68,7 +68,7 @@ export async function authenticateSupabaseSession(request: NextRequest): Promise
       .select("workspace_id, workspaces!inner(slug)")
       .eq("user_id", userId)
       .eq("workspaces.slug", workspaceSlug)
-      .neq("status", "invited")
+      .eq("status", "active")
       .single();
 
     if (membershipError || !membership) {

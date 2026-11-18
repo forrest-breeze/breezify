@@ -77,7 +77,8 @@ function makeAdminMock({
         select: vi.fn(() => ({
           eq: vi.fn(() => ({
             eq: vi.fn(() => ({
-              neq: vi.fn(() => ({ single: membershipSingle })),
+              // .eq("status", "active"): only active members authenticate.
+              eq: vi.fn(() => ({ single: membershipSingle })),
             })),
           })),
         })),

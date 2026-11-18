@@ -3,6 +3,7 @@ import { revalidateTag } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveWorkspace } from "@/lib/db/workspace";
+import { requireWorkspaceRole } from "@/lib/auth/workspace-role";
 import { createWorkspaceDocument } from "@/lib/db/documents";
 import { getPostHogClient } from "@/lib/posthog-server";
 import { safeJsonBody, slugSchema } from "@/lib/validation";
@@ -139,6 +140,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 404 },
     );
   }
+
+  const denied = requireWorkspaceRole(workspace.role, "editor");
+  if (denied) return denied;
 
   const parsed = await safeJsonBody(request, postBodySchema);
   if (!parsed.ok) return parsed.response;

@@ -41,11 +41,13 @@ export default async function DashboardLayout({
 
   // Breeze internal tool: one workspace, no onboarding. First visit adds the
   // user to the Breeze workspace (see lib/breeze-workspace.ts).
+  let deactivated = false
   try {
-    await withTimeout(
+    const membership = await withTimeout(
       ensureBreezeWorkspaceMember(createAdminClient(), user.id),
       MEMBERSHIP_TIMEOUT_MS
     )
+    deactivated = membership.deactivated
   } catch (err) {
     // A transient failure renders the shell; child loaders and API routes
     // enforce their own workspace checks and the next load retries the join.
@@ -55,6 +57,11 @@ export default async function DashboardLayout({
       console.error("[Breeze] workspace membership check:", err)
       throw err
     }
+  }
+
+  // An admin removed this person's access (Settings -> Members).
+  if (deactivated) {
+    redirect("/access-removed")
   }
 
   return (

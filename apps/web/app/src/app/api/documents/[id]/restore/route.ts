@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveWorkspace } from "@/lib/db/workspace";
+import { requireWorkspaceRole } from "@/lib/auth/workspace-role";
 import { safeRouteParams, uuidParamSchema } from "@/lib/validation";
 import { requireRouteUser } from "@/lib/auth/route-auth";
 
@@ -29,6 +30,9 @@ export async function POST(
       { status: 404 },
     );
   }
+
+  const denied = requireWorkspaceRole(workspace.role, "editor");
+  if (denied) return denied;
 
   const parsedParams = safeRouteParams(await params, uuidParamSchema);
   if (!parsedParams.ok) return parsedParams.response;

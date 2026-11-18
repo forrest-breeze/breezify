@@ -101,7 +101,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       `
       )
       .eq("user_id", userId)
-      .neq("status", "invited"); // Only include active memberships
+      .eq("status", "active"); // Only include active memberships
 
     if (error) {
       console.error("[Breezify] Failed to fetch workspaces:", error.message);

@@ -37,6 +37,7 @@ export async function getActiveWorkspace(
       .select("id, workspace_id, role")
       .eq("user_id", userId)
       .eq("workspace_id", preferredId)
+      .eq("status", "active")
       .abortSignal(signal)
       .maybeSingle();
 
@@ -49,6 +50,7 @@ export async function getActiveWorkspace(
     .from("workspace_members")
     .select("id, workspace_id, role")
     .eq("user_id", userId)
+    .eq("status", "active")
     .limit(1)
     .abortSignal(signal)
     .maybeSingle();

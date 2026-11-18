@@ -106,7 +106,7 @@ export async function authenticatePAT(request: NextRequest): Promise<{
       .select("workspace_id, role, workspaces!inner(slug)")
       .eq("user_id", userId)
       .eq("workspaces.slug", workspaceSlug)
-      .neq("status", "invited")
+      .eq("status", "active")
       .single();
 
     if (membershipError || !membership) {

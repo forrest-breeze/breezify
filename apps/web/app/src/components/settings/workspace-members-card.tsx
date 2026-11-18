@@ -9,6 +9,7 @@ import {
   Search,
   Send,
   Shield,
+  UserCheck,
   UserMinus,
   UserPlus,
   X,
@@ -58,7 +59,15 @@ import { InviteMemberDialog } from "@/components/app/invite-member-dialog"
 import { useTeamMembers, useWorkspace } from "@/hooks/swr"
 import { createClient } from "@/lib/supabase/client"
 import { cn, getInitials } from "@/lib/utils"
-import { canManageRole, type WorkspaceRole } from "@breezify/core"
+import { canManageRole, type TeamMember, type WorkspaceRole } from "@breezify/core"
+import { hasWorkspaceRole } from "@/lib/auth/workspace-role"
+
+const STATUS_LABELS: Record<TeamMember["member_status"], string> = {
+  active: "Active",
+  invited: "Invited",
+  expired: "Expired",
+  deactivated: "Deactivated",
+}
 
 interface WorkspaceMembersCardProps {
   /** When set, only show the first N rows. A "See all" link appears when total members exceed it. */
@@ -79,13 +88,17 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
   const members = useMemo(() => teamData?.members ?? [], [teamData?.members])
   const currentUserId = teamData?.current_user_id ?? null
   const currentUserRole = (workspace?.user_role as WorkspaceRole) || "viewer"
-  const canManageMembers = canManageRole(currentUserRole, "editor")
+  // Member management is admin/owner only (enforced in /api/team too).
+  const canManageMembers = hasWorkspaceRole(currentUserRole, "admin")
 
   const [memberSearchQuery, setMemberSearchQuery] = useState("")
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false)
   const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null)
   const [resendingId, setResendingId] = useState<string | null>(null)
   const [resendError, setResendError] = useState<{ id: string; message: string } | null>(null)
+  const [transferTargetId, setTransferTargetId] = useState<string | null>(null)
+  const [showDeactivated, setShowDeactivated] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!workspaceId) return
@@ -112,8 +125,10 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
   }, [workspaceId, instanceId, mutateTeam])
 
   const filteredMembers = useMemo(() => {
-    const statusRank = { active: 0, invited: 1, expired: 2 } as const
-    const sorted = [...members].sort((a, b) => {
+    const statusRank = { active: 0, invited: 1, expired: 2, deactivated: 3 } as const
+    const sorted = [...members]
+      .filter((m) => showDeactivated || m.member_status !== "deactivated")
+      .sort((a, b) => {
       if (a.user_id === currentUserId) return -1
       if (b.user_id === currentUserId) return 1
       const rankDiff = statusRank[a.member_status] - statusRank[b.member_status]
@@ -129,23 +144,75 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
       const emailMatch = member.email?.toLowerCase().includes(query)
       return nameMatch || emailMatch
     })
-  }, [members, currentUserId, memberSearchQuery])
+  }, [members, currentUserId, memberSearchQuery, showDeactivated])
+
+  const activeCount = members.filter((m) => m.member_status === "active").length
+  const deactivatedCount = members.filter((m) => m.member_status === "deactivated").length
 
   const visibleMembers =
     limit !== undefined ? filteredMembers.slice(0, limit) : filteredMembers
   const showSeeAllLink = limit !== undefined && members.length > limit
 
-  const handleRoleChange = async (memberId: string, role: string) => {
+  /** Send a member-management request; surface the API's error message. */
+  const sendTeamRequest = async (
+    input: string,
+    init: RequestInit,
+    fallbackError: string,
+  ): Promise<void> => {
+    setActionError(null)
     try {
-      await fetch("/api/team", {
+      const res = await fetch(input, init)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setActionError(body.error ?? fallbackError)
+      }
+    } catch (err) {
+      console.error("[Breezify] Member update failed:", err)
+      setActionError(fallbackError)
+    } finally {
+      mutateTeam()
+    }
+  }
+
+  const handleRoleChange = async (memberId: string, role: string) => {
+    // Making someone owner demotes you to admin; confirm first.
+    if (role === "owner") {
+      setTransferTargetId(memberId)
+      return
+    }
+    await sendTeamRequest(
+      "/api/team",
+      {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ member_id: memberId, role }),
-      })
-      mutateTeam()
-    } catch (err) {
-      console.error("[Breezify] Failed to update role:", err)
-    }
+      },
+      "Failed to update role",
+    )
+  }
+
+  const handleTransferOwnership = async (memberId: string) => {
+    await sendTeamRequest(
+      "/api/team",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId, role: "owner" }),
+      },
+      "Failed to transfer ownership",
+    )
+  }
+
+  const handleReactivate = async (memberId: string) => {
+    await sendTeamRequest(
+      "/api/team",
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId, status: "active" }),
+      },
+      "Failed to reactivate member",
+    )
   }
 
   const handleResendInvite = async (
@@ -175,21 +242,14 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
     }
   }
 
+  // Pending invites are deleted; joined members are deactivated (see DELETE
+  // /api/team), so the row stays and can be reactivated.
   const handleRemoveMember = async (memberId: string) => {
-    const prev = teamData
-    mutateTeam(
-      prev
-        ? { ...prev, members: prev.members.filter((m) => m.member_id !== memberId) }
-        : undefined,
-      false,
+    await sendTeamRequest(
+      `/api/team?id=${memberId}`,
+      { method: "DELETE" },
+      "Failed to remove member",
     )
-    try {
-      await fetch(`/api/team?id=${memberId}`, { method: "DELETE" })
-      mutateTeam()
-    } catch (err) {
-      console.error("[Breezify] Failed to remove member:", err)
-      if (prev) mutateTeam(prev, false)
-    }
   }
 
   if (!canManageMembers) return null
@@ -201,7 +261,8 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
           <div>
             <CardTitle>Members</CardTitle>
             <CardDescription>
-              {members.length} member{members.length !== 1 ? "s" : ""} in your workspace
+              {activeCount} active member{activeCount !== 1 ? "s" : ""}
+              {deactivatedCount > 0 && ` · ${deactivatedCount} deactivated`}
             </CardDescription>
           </div>
           <Button size="sm" onClick={() => setInviteDialogOpen(true)}>
@@ -242,6 +303,23 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
               )}
             </div>
 
+            {deactivatedCount > 0 && limit === undefined && (
+              <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={showDeactivated}
+                  onChange={(e) => setShowDeactivated(e.target.checked)}
+                />
+                Show deactivated members ({deactivatedCount})
+              </label>
+            )}
+
+            {actionError && (
+              <p role="alert" className="text-sm text-destructive">
+                {actionError}
+              </p>
+            )}
+
             <Table>
               <TableHeader>
                 <TableRow>
@@ -261,12 +339,16 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
                 ) : (
                   visibleMembers.map((member) => {
                     const isCurrentUser = member.user_id === currentUserId
+                    const isDeactivated = member.member_status === "deactivated"
+                    const isPending =
+                      member.member_status === "invited" || member.member_status === "expired"
                     return (
                       <TableRow
                         key={member.member_id}
                         className={cn(
                           "group/row",
                           isCurrentUser && "bg-muted/30",
+                          isDeactivated && "opacity-60",
                         )}
                       >
                         <TableCell>
@@ -310,13 +392,10 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
                               "text-[10px] font-normal",
                               member.member_status === "expired" &&
                                 "text-muted-foreground/70 border-dashed",
+                              isDeactivated && "text-destructive border-destructive/40",
                             )}
                           >
-                            {member.member_status === "active"
-                              ? "Active"
-                              : member.member_status === "expired"
-                                ? "Expired"
-                                : "Invited"}
+                            {STATUS_LABELS[member.member_status] ?? member.member_status}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -334,6 +413,13 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
                                 }
                               />
                               <DropdownMenuContent align="end" className="w-48">
+                                {isDeactivated ? (
+                                  <DropdownMenuItem onClick={() => handleReactivate(member.member_id)}>
+                                    <UserCheck className="mr-2 size-4" />
+                                    Reactivate
+                                  </DropdownMenuItem>
+                                ) : (
+                                <>
                                 <DropdownMenuGroup>
                                   <DropdownMenuLabel className="flex items-center gap-2">
                                     <Shield className="size-3.5" />
@@ -353,7 +439,7 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
                                     {canManageRole(currentUserRole, "agent-only") && <DropdownMenuRadioItem value="agent-only">Agent Only</DropdownMenuRadioItem>}
                                   </DropdownMenuRadioGroup>
                                 </DropdownMenuGroup>
-                                {member.member_status !== "active" && member.email && (
+                                {isPending && member.email && (
                                   <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem
@@ -387,10 +473,10 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
                                   onClick={() => setRemoveConfirmId(member.member_id)}
                                 >
                                   <UserMinus className="mr-2 size-4" />
-                                  {member.member_status === "active"
-                                    ? "Remove"
-                                    : "Revoke"}
+                                  {isPending ? "Revoke invite" : "Deactivate"}
                                 </DropdownMenuItem>
+                                </>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           )}
@@ -423,17 +509,17 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
-                    {members.find((m) => m.member_id === removeConfirmId)?.member_status === "invited"
-                      ? "Revoke invitation?"
-                      : "Remove member?"}
+                    {members.find((m) => m.member_id === removeConfirmId)?.member_status === "active"
+                      ? "Deactivate member?"
+                      : "Revoke invitation?"}
                   </AlertDialogTitle>
                   <AlertDialogDescription>
                     {(() => {
                       const m = members.find((m) => m.member_id === removeConfirmId)
                       if (!m) return ""
-                      return m.member_status === "invited"
-                        ? `This will revoke the pending invitation for ${m.email}.`
-                        : `This will remove ${m.display_name ?? m.email} from the workspace. They will lose access to all workspace resources.`
+                      return m.member_status === "active"
+                        ? `${m.display_name ?? m.email} will lose access to the workspace immediately and won't be re-added when they sign in. You can reactivate them later.`
+                        : `This will revoke the pending invitation for ${m.email}.`
                     })()}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
@@ -445,9 +531,38 @@ export function WorkspaceMembersCard({ limit }: WorkspaceMembersCardProps) {
                       setRemoveConfirmId(null)
                     }}
                   >
-                    {members.find((m) => m.member_id === removeConfirmId)?.member_status === "invited"
-                      ? "Revoke"
-                      : "Remove"}
+                    {members.find((m) => m.member_id === removeConfirmId)?.member_status === "active"
+                      ? "Deactivate"
+                      : "Revoke"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog
+              open={!!transferTargetId}
+              onOpenChange={(open) => { if (!open) setTransferTargetId(null) }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Transfer ownership?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {(() => {
+                      const m = members.find((m) => m.member_id === transferTargetId)
+                      if (!m) return ""
+                      return `${m.display_name ?? m.email} will become the workspace owner and you will become an admin. Only the new owner can undo this.`
+                    })()}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => {
+                      if (transferTargetId) void handleTransferOwnership(transferTargetId)
+                      setTransferTargetId(null)
+                    }}
+                  >
+                    Transfer ownership
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
