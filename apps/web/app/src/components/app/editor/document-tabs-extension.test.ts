@@ -61,3 +61,35 @@ describe("inserting card and tab groups", async () => {
     editor.destroy()
   })
 })
+
+describe("editable visual blocks", async () => {
+  const ext = await import("./document-tabs-extension")
+  const { renderDocumentHtml } = await import("@/lib/render-document-html")
+  const { documentHtmlToMarkdown } = await import("@/lib/document-export")
+  const make = (content: string) => new Editor({
+    extensions: [
+      StarterKit,
+      ext.DocumentCards, ext.DocumentCard,
+      ext.DocumentSteps, ext.DocumentStep,
+      ext.DocumentTimeline, ext.DocumentPhase,
+      ext.DocumentFormula,
+    ],
+    content,
+  })
+
+  it.each([
+    ['{% cards %}\n{% card title="Holds funds" eyebrow="Balance #1" tone="green" %}\nBody.\n{% endcard %}\n{% endcards %}'],
+    ['{% steps %}\n{% step title="Settlement day" note="T+3" %}\nBreeze **evaluates**.\n{% endstep %}\n{% endsteps %}'],
+    ['{% timeline %}\n{% phase title="All payin" label="Week 1–2" transition="after ~2 weeks" %}\nNo settlements.\n{% endphase %}\n{% endtimeline %}'],
+    ["{% formula %}Avg daily payouts | 21-day average × 3 | days = Minimum Balance{% endformula %}"],
+  ])("loads, reloads and saves %s unchanged", (markdown) => {
+    const editor = make(renderDocumentHtml(markdown))
+    const html = editor.getHTML()
+    const reloaded = make(html)
+    expect(reloaded.getHTML()).toBe(html)
+    const saved = documentHtmlToMarkdown(html)
+    expect(make(renderDocumentHtml(saved)).getHTML()).toBe(html)
+    editor.destroy()
+    reloaded.destroy()
+  })
+})

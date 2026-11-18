@@ -188,3 +188,13 @@ export function publicPortalApiPath(
     ? `${hrefBase}/_breezify/api/${endpoint}`
     : `/api/public/${endpoint}`
 }
+
+/** A document's Markdown twin, `<hrefBase>/doc/<ref>.md` (served via the proxy). */
+export function portalDocMarkdownHref(hrefBase: string, documentRef: string): string {
+  const ref = documentRef
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/")
+  return publicPortalHref(hrefBase, `/doc/${ref}.md`)
+}

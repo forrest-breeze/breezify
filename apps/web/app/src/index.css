@@ -264,29 +264,55 @@ a.btn-primary {
   }
 }
 
-/* Minimal, auto-hiding scrollbar for the portal docs rail. The thumb is
-   transparent until PortalSidebarRail sets [data-scrolling] during a scroll,
-   then disappears again shortly after scrolling stops. */
+/* Minimal, auto-hiding scrollbars for the portal (public site, the builder's
+   preview frame, and the builder's in-place document pane). Thumbs stay
+   transparent until PortalScrollbars (or PortalSidebarRail) marks the
+   scrolling element with [data-scrolling]; then they show in the portal
+   accent and fade out shortly after scrolling stops. `scrollbar-color` is
+   inherited, so `*` pins every descendant back to hidden. */
+html:has([data-portal-root]),
+[data-portal-scrollbars],
+[data-portal-scrollbars] *,
 .portal-rail-scroll {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
   scrollbar-gutter: auto;
 }
+html:has([data-portal-root])[data-scrolling],
+[data-portal-scrollbars][data-scrolling],
+[data-portal-scrollbars] [data-scrolling],
 .portal-rail-scroll[data-scrolling] {
-  scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--portal-accent, var(--primary)) 60%, transparent)
+    transparent;
 }
+html:has([data-portal-root])::-webkit-scrollbar,
+[data-portal-scrollbars]::-webkit-scrollbar,
+[data-portal-scrollbars] ::-webkit-scrollbar,
 .portal-rail-scroll::-webkit-scrollbar {
   width: 6px;
-}
-.portal-rail-scroll::-webkit-scrollbar-track {
+  height: 6px;
   background: transparent;
 }
+html:has([data-portal-root])::-webkit-scrollbar-track,
+[data-portal-scrollbars]::-webkit-scrollbar-track,
+[data-portal-scrollbars] ::-webkit-scrollbar-track,
+.portal-rail-scroll::-webkit-scrollbar-track,
+html:has([data-portal-root])::-webkit-scrollbar-corner,
+[data-portal-scrollbars] ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+html:has([data-portal-root])::-webkit-scrollbar-thumb,
+[data-portal-scrollbars]::-webkit-scrollbar-thumb,
+[data-portal-scrollbars] ::-webkit-scrollbar-thumb,
 .portal-rail-scroll::-webkit-scrollbar-thumb {
   background: transparent;
   border-radius: 9999px;
 }
+html:has([data-portal-root])[data-scrolling]::-webkit-scrollbar-thumb,
+[data-portal-scrollbars][data-scrolling]::-webkit-scrollbar-thumb,
+[data-portal-scrollbars] [data-scrolling]::-webkit-scrollbar-thumb,
 .portal-rail-scroll[data-scrolling]::-webkit-scrollbar-thumb {
-  background: color-mix(in oklab, var(--foreground) 22%, transparent);
+  background: color-mix(in srgb, var(--portal-accent, var(--primary)) 60%, transparent);
 }
 
 @layer base {

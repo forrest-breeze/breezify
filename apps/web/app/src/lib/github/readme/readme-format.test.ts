@@ -116,6 +116,39 @@ describe('ReadMe Markdown -> Breezify Markdown', () => {
     )
   })
 
+  it('drops the heading marker from native blockquote callouts', () => {
+    expect(readmeBodyToMarkdown('> 🚧 ### Top-up takes priority\n>\n> Read this.')).toBe(
+      '> 🚧 Top-up takes priority\n>\n> Read this.',
+    )
+    expect(readmeBodyToMarkdown('> Plain ### quote')).toBe('> Plain ### quote')
+  })
+
+  it('turns cards into card directives', () => {
+    const source = [
+      '<Cards columns={2}>',
+      '  <Card title="Balances" href="/docs/balances" icon="💰">',
+      '    Where funds are held.',
+      '  </Card>',
+      '  <Card title="Payouts" icon="fa-rocket" />',
+      '</Cards>',
+    ].join('\n')
+    expect(readmeBodyToMarkdown(source)).toBe(
+      [
+        '{% cards %}',
+        '',
+        '{% card title="Balances" href="/docs/balances" icon="💰" %}',
+        'Where funds are held.',
+        '{% endcard %}',
+        '',
+        '{% card title="Payouts" %}',
+        '',
+        '{% endcard %}',
+        '',
+        '{% endcards %}',
+      ].join('\n'),
+    )
+  })
+
   it('turns anchors, images and embeds into Markdown', () => {
     expect(
       readmeBodyToMarkdown('Contact us <Anchor label="here" target="_blank" href="https://breeze.cash/sales">here</Anchor>.'),

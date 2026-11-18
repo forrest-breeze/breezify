@@ -141,6 +141,7 @@ export async function PortalApiReferenceView({
         brandLogoUrl={theme.logoUrl || null}
         brandDarkLogoUrl={theme.darkLogoUrl || null}
         brandAccentColor={theme.accentColor}
+        hrefBase={hrefBase}
       />
     </>
   )

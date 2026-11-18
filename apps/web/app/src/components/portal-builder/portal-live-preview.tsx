@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { LoadingBar } from "@/components/ui/loading-bar"
+import { PortalScrollbars } from "@/components/public-kb/portal/portal-scrollbars"
 import { PreviewMeshBackground } from "@/components/portal-builder/preview-mesh-background"
 import {
   createPortalPreviewThemeMessage,
@@ -76,7 +77,12 @@ interface PortalLivePreviewProps {
    * device switch stay put so editing never feels like leaving the preview.
    */
   content?: React.ReactNode
-  /** True while `content` is swapping to another document; shows the progress bar. */
+  /** Portal accent, used for the in-place editor pane's scrollbars. */
+  accentColor?: string
+  /**
+   * True while the host is navigating (switching pages, or swapping `content`
+   * to another document); shows the progress bar over whatever is on screen.
+   */
   contentLoading?: boolean
   /** Portal chrome drawn above `content` inside the frame. */
   contentHeader?: React.ReactNode
@@ -236,6 +242,7 @@ export function PortalLivePreview({
   onPageChange,
   actions,
   content,
+  accentColor,
   contentLoading = false,
   contentHeader,
   contentSidebar,
@@ -541,9 +548,9 @@ export function PortalLivePreview({
                 surface={surface}
               />
             )}
-            {(showReloadBar || (editing && contentLoading)) && (
+            {(showReloadBar || contentLoading) && (
               <LoadingBar
-                label={showReloadBar ? "Updating portal preview" : "Opening document"}
+                label="Updating portal preview"
                 className="delayed-reveal pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5 rounded-none bg-transparent"
               />
             )}
@@ -555,13 +562,18 @@ export function PortalLivePreview({
               <div
                 data-testid="portal-preview-editor"
                 data-preview-editor=""
+                data-portal-scrollbars=""
                 className="flex min-h-0 flex-col"
                 style={{
                   width: frame.width,
                   height: frame.height,
                   zoom: scale,
+                  ...(accentColor
+                    ? ({ "--portal-accent": accentColor } as React.CSSProperties)
+                    : null),
                 }}
               >
+                <PortalScrollbars />
                 {contentHeader}
                 <div className="flex min-h-0 flex-1">
                   {contentSidebar}

@@ -2,10 +2,13 @@ import { NextResponse } from "next/server"
 import { headers } from "next/headers"
 import { z } from "zod"
 import {
+  getPublicDocument,
   getPublicDocuments,
   getPublicDocumentsWithContent,
   getPublicTaxonomy,
+  isDocInScope,
 } from "@/lib/public-kb"
+import { DOC_REF_RE } from "@/lib/portal/doc-ref"
 import { resolvePortalBase } from "@/lib/public-kb-portal-base"
 import { checkPublicRateLimit } from "@/lib/public-kb-ratelimit"
 import { portalDocumentToMarkdown } from "@/lib/portal/portal-doc-markdown"
@@ -41,14 +44,25 @@ export const dynamic = "force-dynamic"
 const querySchema = z.object({
   // Portal base path: "<workspace>" or "<workspace>/<project>".
   portal: z.string().trim().min(1).max(140),
-  variant: z.enum(["index", "full"]).default("index"),
+  variant: z.enum(["index", "full", "doc"]).default("index"),
+  // Single-document markdown (`<portal>/doc/<ref>.md`): public slug or id.
+  doc: z.string().trim().regex(DOC_REF_RE).optional(),
 })
 
-const TEXT_HEADERS = {
-  "content-type": "text/plain; charset=utf-8",
+const TEXT_HEADERS_BASE = {
   // Portal content changes rarely and bots hit these files hard; let the CDN
   // absorb it while keeping the window short enough to feel live.
   "cache-control": "public, max-age=0, s-maxage=300, stale-while-revalidate=3600",
+} as const
+
+const TEXT_HEADERS = {
+  ...TEXT_HEADERS_BASE,
+  "content-type": "text/plain; charset=utf-8",
+} as const
+
+const MARKDOWN_HEADERS = {
+  ...TEXT_HEADERS_BASE,
+  "content-type": "text/markdown; charset=utf-8",
 } as const
 
 function textResponse(body: string, status = 200): NextResponse {
@@ -67,9 +81,11 @@ export async function GET(request: Request): Promise<NextResponse> {
   const parsed = querySchema.safeParse({
     portal: url.searchParams.get("portal") ?? "",
     variant: url.searchParams.get("variant") ?? "index",
+    doc: url.searchParams.get("doc") ?? undefined,
   })
   if (!parsed.success) return textResponse("Not found\n", 404)
-  const { portal, variant } = parsed.data
+  const { portal, variant, doc: docRef } = parsed.data
+  if (variant === "doc" && !docRef) return textResponse("Not found\n", 404)
 
   const allowed = await checkPublicRateLimit(
     `llms:${portal}:${await clientIp()}`,
@@ -90,6 +106,25 @@ export async function GET(request: Request): Promise<NextResponse> {
     name: workspace.branding.name || workspace.name,
     tagline: workspace.branding.tagline,
     portalUrl,
+  }
+
+  if (variant === "doc" && docRef) {
+    // Same gates as the doc page: resolve, then require it inside the portal's
+    // reachable scope (unpicked docs in an explicitDocs folder included).
+    const doc = await getPublicDocument(workspace.id, docRef)
+    if (
+      !doc ||
+      !(await isDocInScope(workspace.id, { id: doc.id, folder_id: doc.folder_id }, scope))
+    ) {
+      return textResponse("Not found\n", 404)
+    }
+    const title = doc.title?.trim() || "Untitled"
+    const body = portalDocumentToMarkdown(doc.content)
+    const source = portalDocUrl(portalUrl, docRef)
+    return new NextResponse(`# ${title}\n\nSource: ${source}\n\n${body}\n`, {
+      status: 200,
+      headers: MARKDOWN_HEADERS,
+    })
   }
 
   if (variant === "index") {

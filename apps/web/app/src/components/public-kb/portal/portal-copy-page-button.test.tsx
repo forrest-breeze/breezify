@@ -9,12 +9,20 @@ import { PortalCopyPageButton } from "./portal-copy-page-button"
 
 const writeText = vi.fn<(text: string) => Promise<void>>()
 
-function Harness({ heading }: { heading?: string }): React.ReactElement {
+function Harness({
+  heading,
+  markdownHref,
+}: {
+  heading?: string
+  markdownHref?: string
+}): React.ReactElement {
   const ref = useRef<HTMLDivElement>(null)
   return (
     <div>
-      <PortalCopyPageButton targetRef={ref} heading={heading} />
-      <div ref={ref}>ignored by jsdom textContent</div>
+      <PortalCopyPageButton targetRef={ref} heading={heading} markdownHref={markdownHref} />
+      <div ref={ref}>
+        <p>Rendered article</p>
+      </div>
     </div>
   )
 }
@@ -45,32 +53,48 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe("PortalCopyPageButton", () => {
-  it("copies the container's text under its heading and confirms", async () => {
+  it("copies the page's Markdown twin and confirms", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("# Quickstart\n\nFrom source", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
     const user = userEvent.setup()
     stubClipboard()
-    render(<Harness heading="Quickstart" />)
+    render(<Harness heading="Quickstart" markdownHref="/p/acme/doc/quickstart.md" />)
 
     await user.click(screen.getByRole("button", { name: "Copy page" }))
 
-    expect(writeText).toHaveBeenCalledWith(
-      "Quickstart\n\nignored by jsdom textContent",
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("# Quickstart\n\nFrom source"),
     )
-    expect(
-      await screen.findByRole("button", { name: "Copied" }),
-    ).toBeInTheDocument()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/p/acme/doc/quickstart.md")
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument()
   })
 
-  it("copies the container alone when it already carries the title", async () => {
+  it("falls back to the rendered article as Markdown without a twin", async () => {
+    const fetchMock = vi.fn(async () => new Response("Not found", { status: 404 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const user = userEvent.setup()
+    stubClipboard()
+    render(<Harness heading="Quickstart" markdownHref="/p/acme/doc/draft.md" />)
+
+    await user.click(screen.getByRole("button", { name: "Copy page" }))
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("# Quickstart\n\nRendered article"),
+    )
+  })
+
+  it("copies the rendered article alone when it already carries the title", async () => {
     const user = userEvent.setup()
     stubClipboard()
     render(<Harness />)
 
     await user.click(screen.getByRole("button", { name: "Copy page" }))
 
-    expect(writeText).toHaveBeenCalledWith("ignored by jsdom textContent")
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("Rendered article"))
   })
 
   it("stays in its resting state when the clipboard is unavailable", async () => {

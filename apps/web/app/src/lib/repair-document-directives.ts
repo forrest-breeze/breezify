@@ -1,5 +1,5 @@
 import { documentHtmlToMarkdown } from "@/lib/document-export"
-import { renderDocumentTabs } from "@/lib/document-tabs"
+import { RENDERED_DIRECTIVE, renderDocumentTabs } from "@/lib/document-tabs"
 
 // Tab/card directives pasted into the rich-text editor are parsed by
 // tiptap-markdown, which doesn't know them: the whole block collapses into
@@ -8,12 +8,12 @@ import { renderDocumentTabs } from "@/lib/document-tabs"
 // already-saved documents render correctly (and are re-saved properly once
 // opened in the editor).
 
-const GROUP_TOKEN = /{%\s*(end)?(?:tabs|cards)\s*%}/g
+const GROUP_TOKEN = /{%\s*(end)?(?:tabs|cards|steps|timeline|formula)\s*%}/g
 const ANY_TOKEN = /{%[^%]*%}/g
 
 /** Cheap pre-check before parsing: does stored HTML contain directive text? */
 export function hasDirectiveText(html: string): boolean {
-  return /{%\s*(?:tabs|cards)\s*%}/.test(html)
+  return /{%\s*(?:tabs|cards|steps|timeline|formula)\s*%}/.test(html)
 }
 
 function balance(text: string): { opened: boolean; depth: number } {
@@ -61,7 +61,7 @@ export function repairDirectiveParagraphs(root: Element, render: (markdown: stri
     if (depth !== 0) continue
     const markdown = restoreDirectiveLines(documentHtmlToMarkdown(run.map((el) => el.outerHTML).join(""), parseTemplate))
     const html = renderDocumentTabs(markdown, render)
-    if (!/data-document-(?:tabs|cards)=/.test(html)) continue
+    if (!RENDERED_DIRECTIVE.test(html)) continue
     const replacement = parseTemplate(html)
     first.before(replacement.content)
     run.forEach((el) => el.remove())

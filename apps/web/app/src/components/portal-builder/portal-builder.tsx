@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react"
 import dynamic from "next/dynamic"
 import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
@@ -180,6 +180,12 @@ import {
   type PortalConnectionStatus,
 } from "@/components/portal-connection-badge"
 
+// AI assistant and Languages are tiny; importing them statically avoids an
+// on-demand chunk compile in dev that could force a full page reload when the
+// section was first opened from the Customize menu.
+import { PortalAiAssistantControls } from "./portal-ai-assistant-controls"
+import { PortalLanguageControls } from "./portal-language-controls"
+
 // The builder contains several mutually-exclusive views and closed-by-default
 // dialogs. Split those client graphs so opening /kb compiles the editor shell,
 // not every customization surface at once.
@@ -197,14 +203,6 @@ const PortalFooterControls = dynamic(() =>
 )
 const PortalHeaderControls = dynamic(() =>
   import("./portal-header-controls").then((mod) => mod.PortalHeaderControls),
-)
-const PortalLanguageControls = dynamic(() =>
-  import("./portal-language-controls").then((mod) => mod.PortalLanguageControls),
-)
-const PortalAiAssistantControls = dynamic(() =>
-  import("./portal-ai-assistant-controls").then(
-    (mod) => mod.PortalAiAssistantControls,
-  ),
 )
 const PublishDialog = dynamic(() =>
   import("./publish-dialog").then((mod) => mod.PublishDialog),
@@ -2336,6 +2334,9 @@ export function PortalBuilder({
   // Set by the document outlet while it swaps documents; the bar is drawn
   // inside the preview frame rather than at the top of the window.
   const [documentSwitching, setDocumentSwitching] = useState(false)
+  // A page switch waits on a server navigation before the frame can reload;
+  // the transition keeps the progress bar up for that whole wait.
+  const [pageSwitchPending, startPageSwitch] = useTransition()
   const { mutate: mutateGlobal } = useSWRConfig()
   const { data: workspace, mutate: mutateWorkspace } = useWorkspace()
   const portalEditorEnabled = workspace?.portal_editor_enabled === true
@@ -3026,8 +3027,10 @@ export function PortalBuilder({
     setActionError(null)
     clearSavedConfirmation()
     setDocumentSearchQuery("")
-    router.replace(knowledgePath(pageSlug), {
-      scroll: false,
+    startPageSwitch(() => {
+      router.replace(knowledgePath(pageSlug), {
+        scroll: false,
+      })
     })
   }
 
@@ -4022,6 +4025,7 @@ export function PortalBuilder({
               frame (in place of the rendered portal) rather than replacing
               it, so the toolbar, Publish and device switch never go away. */}
           <PortalLivePreview
+              accentColor={layout?.theme.accentColor}
               content={hasOpenDocument ? (
                 <PortalEditorExitProvider
                   value={() => void handlePageChange(activePageSlug)}
@@ -4038,7 +4042,7 @@ export function PortalBuilder({
                   </PortalEditorDocument>
                 </PortalEditorExitProvider>
               ) : hasSelectedContent ? children : undefined}
-              contentLoading={hasOpenDocument && documentSwitching}
+              contentLoading={pageSwitchPending || (hasOpenDocument && documentSwitching)}
               contentHeader={
                 hasSelectedContent ? (
                   <PortalEditorFrameHeader

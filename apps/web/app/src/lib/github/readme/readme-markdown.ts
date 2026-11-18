@@ -168,16 +168,25 @@ function transformProse(value: string): string {
     (_match, attributes: string) =>
       markdownLink(attribute(attributes, 'title'), attribute(attributes, 'url')),
   )
+  // <Cards>/<Card> become Breezify card directives (rendered as a card grid and
+  // editable in the editor), not a bullet list.
   output = output.replace(
-    /<Card\b([^>]*)>([\s\S]*?)<\/Card>/g,
-    (_match, attributes: string, inner: string) => {
-      const title = attribute(attributes, 'title')
-      const link = markdownLink(title, attribute(attributes, 'href'))
-      const body = dedent(inner).replace(/\n+/g, ' ').trim()
-      const head = link ? `**${link}**` : ''
-      return `\n- ${[head, body].filter(Boolean).join(' — ')}\n`
+    /<Card\b([^>]*?)(?:\/>|>([\s\S]*?)<\/Card>)/g,
+    (_match, attributes: string, inner: string | undefined) => {
+      const parts: string[] = []
+      const title = attribute(attributes, 'title') ?? ''
+      parts.push(`title=${JSON.stringify(title)}`)
+      const href = attribute(attributes, 'href')
+      if (href) parts.push(`href=${JSON.stringify(href)}`)
+      const icon = attribute(attributes, 'icon')
+      if (icon && !/[A-Za-z0-9<>&"']/.test(icon) && icon.length <= 16) {
+        parts.push(`icon=${JSON.stringify(icon)}`)
+      }
+      const body = inner ? dedent(inner) : ''
+      return `\n{% card ${parts.join(' ')} %}\n${body}\n{% endcard %}\n`
     },
   )
+  output = output.replace(/<Cards\b[^>]*>/g, '\n\n{% cards %}\n').replace(/<\/Cards>/g, '\n{% endcards %}\n\n')
   output = output.replace(
     /<Anchor\b([^>]*)>([\s\S]*?)<\/Anchor>/g,
     (_match, attributes: string, inner: string) =>
@@ -204,6 +213,13 @@ function transformProse(value: string): string {
   output = output.replace(
     /<Tabs\b[^>]*>([\s\S]*?)<\/Tabs>/g,
     (_match, inner: string) => `\n\n${dedent(inner)}\n\n`,
+  )
+
+  // ReadMe's native callout syntax allows a heading on the first line
+  // (`> 🚧 ### Title`); Markdown can't nest that heading, so keep just the title.
+  output = output.replace(
+    /^(>[ \t]*\p{Extended_Pictographic}\uFE0F?)[ \t]+#{1,6}[ \t]+/gmu,
+    '$1 ',
   )
 
   return output

@@ -8,6 +8,7 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript"
 import { sanitizeElementTree } from "@/lib/sanitize-dom"
 import { hasDirectiveText, repairDirectiveParagraphs } from "@/lib/repair-document-directives"
 import { looksLikeHtml } from "@/lib/html-detection"
+import { enhanceCallouts } from "@/lib/document-callouts"
 import { mermaidCodeSource } from "@/lib/mermaid-source"
 import { rewriteMediaForPublic } from "@/lib/storage/media-refs"
 
@@ -229,6 +230,7 @@ function sanitizeWithJsdom(html: string): string {
   const { document } = dom.window
   if (hasDirectiveText(html)) repairDirectiveParagraphs(document.body, (source) => markdown.render(source))
   highlightCodeBlocks(document, document.body)
+  enhanceCallouts(document.body)
   return sanitizeElementTree(document.body)
 }
 

@@ -29,6 +29,7 @@ import type { PortalPreviewThemeMode } from "@/lib/portal/preview-theme-message"
 import { validPortalLanguage } from "@/lib/portal/language-preference"
 import { PortalTranslationProvider } from "./portal-translation"
 import { PortalThemeInit } from "./portal-theme-toggle"
+import { PortalScrollbars } from "./portal-scrollbars"
 
 interface PortalShellPreview {
   /** Editor-owned mode, kept separate from a real visitor's theme preference. */
@@ -175,6 +176,7 @@ export function PortalShell({
       data-portal-href-base={hrefBase}
       data-portal-surface={surface}
       {...portalThemeDataAttributes(theme)}
+      data-portal-scrollbars
       className={cn(
         "flex min-h-screen flex-col bg-background text-foreground",
         initialThemeMode,
@@ -192,6 +194,7 @@ export function PortalShell({
         <link rel="stylesheet" href={googleFontsHref} precedence="default" />
       ) : null}
       {fontFaceCss ? <style>{fontFaceCss}</style> : null}
+      <PortalScrollbars />
       {theme.banner ? (
         <PortalBanner banner={theme.banner} scope={base} preview={Boolean(preview)} />
       ) : null}

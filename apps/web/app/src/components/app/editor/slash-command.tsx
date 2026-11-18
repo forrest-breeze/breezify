@@ -32,6 +32,7 @@ import {
   Workflow,
   Table as TableIcon,
   LayoutGrid,
+  Milestone,
   PanelTop,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -452,6 +453,65 @@ function getSlashCommandItems(
               attrs: { title },
               content: [{ type: "paragraph" }],
             })),
+          })
+          .run(),
+    },
+    {
+      title: "Steps",
+      section: "Components",
+      description: "Numbered steps with optional notes",
+      keywords: ["steps", "step", "process", "procedure", "numbered", "flow", "sequence"],
+      icon: <ListOrdered className="size-4" />,
+      command: () =>
+        chain()
+          .focus()
+          .deleteRange(r)
+          .insertContent({
+            type: "documentSteps",
+            content: ["Step one", "Step two", "Step three"].map((title) => ({
+              type: "documentStep",
+              attrs: { title },
+              content: [{ type: "paragraph" }],
+            })),
+          })
+          .run(),
+    },
+    {
+      title: "Timeline",
+      section: "Components",
+      description: "Labelled phases with transitions",
+      keywords: ["timeline", "phase", "phases", "roadmap", "stages", "schedule"],
+      icon: <Milestone className="size-4" />,
+      command: () =>
+        chain()
+          .focus()
+          .deleteRange(r)
+          .insertContent({
+            type: "documentTimeline",
+            content: [
+              { label: "Phase 1", title: "First phase" },
+              { label: "Phase 2", title: "Second phase" },
+            ].map((attrs) => ({
+              type: "documentPhase",
+              attrs,
+              content: [{ type: "paragraph" }],
+            })),
+          })
+          .run(),
+    },
+    {
+      title: "Formula",
+      section: "Components",
+      description: "Terms and operators, e.g. A × B = C",
+      keywords: ["formula", "equation", "calculation", "math", "multiply", "sum"],
+      icon: <Sigma className="size-4" />,
+      command: () =>
+        chain()
+          .focus()
+          .deleteRange(r)
+          .insertContent({
+            type: "documentFormula",
+            attrs: { expression: "Value | what it means × Factor | what it means = Result" },
           })
           .run(),
     },

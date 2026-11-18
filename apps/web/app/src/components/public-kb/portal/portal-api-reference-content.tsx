@@ -9,6 +9,7 @@ import { KbReadingToc } from "@/components/kb/kb-reading-toc"
 import { PublicProse } from "@/components/public-kb/public-prose"
 import { PortalFooter } from "@/components/public-kb/portal/portal-footer"
 import { PortalSidebarRail } from "./portal-sidebar-rail"
+import { portalDocMarkdownHref } from "@/lib/portal/public-base-path"
 import { PortalCopyPageButton } from "@/components/public-kb/portal/portal-copy-page-button"
 import type {
   ApiHttpMethod,
@@ -54,6 +55,8 @@ interface PortalApiReferenceContentProps {
   brandLogoUrl: string | null
   brandDarkLogoUrl: string | null
   brandAccentColor: string
+  /** In-portal link prefix; enables the endpoint's Markdown actions. */
+  hrefBase?: string
 }
 
 const OVERVIEW_HEADING_ID = "api-reference-overview"
@@ -112,6 +115,7 @@ export function PortalApiReferenceContent({
   brandLogoUrl,
   brandDarkLogoUrl,
   brandAccentColor,
+  hrefBase,
 }: PortalApiReferenceContentProps): React.ReactElement {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set())
   // The current endpoint's group is always open on arrival. Collapsing it by
@@ -322,7 +326,14 @@ export function PortalApiReferenceContent({
                     href={items[activeIndex]?.href}
                   />
                 ) : null}
-                {active ? <PortalCopyPageButton targetRef={contentRef} /> : null}
+                {active ? (
+                  <PortalCopyPageButton
+                    targetRef={contentRef}
+                    markdownHref={
+                      hrefBase ? portalDocMarkdownHref(hrefBase, active.id) : undefined
+                    }
+                  />
+                ) : null}
               </div>
             </div>
           </header>

@@ -68,6 +68,37 @@ describe("parsePortalLlmsPath", () => {
   })
 })
 
+describe("parsePortalLlmsPath — document Markdown twins", () => {
+  it("parses a workspace-root doc", () => {
+    expect(parsePortalLlmsPath("/p/acme/doc/quickstart.md")).toEqual({
+      base: "acme",
+      variant: "doc",
+      doc: "quickstart",
+    })
+  })
+
+  it("parses a project doc with a nested slug", () => {
+    expect(parsePortalLlmsPath("/p/acme/help/doc/guides/install.md")).toEqual({
+      base: "acme/help",
+      variant: "doc",
+      doc: "guides/install",
+    })
+  })
+
+  it.each(["/p/acme/doc/.md", "/p/acme/doc/quickstart", "/p/acme/folder/x.md"])(
+    "returns null for %s",
+    (path) => {
+      expect(parsePortalLlmsPath(path)).toBeNull()
+    },
+  )
+
+  it("passes the doc ref to the API", () => {
+    expect(
+      portalLlmsApiSearch({ base: "acme", variant: "doc", doc: "guides/install" }),
+    ).toBe("portal=acme&variant=doc&doc=guides%2Finstall")
+  })
+})
+
 describe("portalLlmsApiSearch", () => {
   it("passes the base through as the portal param", () => {
     expect(portalLlmsApiSearch({ base: "acme/help", variant: "index" })).toBe(

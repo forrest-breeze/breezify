@@ -16,7 +16,11 @@ const {
   mockGetDocuments,
   mockGetDocumentsWithContent,
   mockHeaders,
+  mockGetDocument,
+  mockIsDocInScope,
 } = vi.hoisted(() => ({
+  mockGetDocument: vi.fn(),
+  mockIsDocInScope: vi.fn(),
   mockResolvePortalBase: vi.fn(),
   mockRateLimit: vi.fn(),
   mockGetTaxonomy: vi.fn(),
@@ -29,6 +33,8 @@ vi.mock("@/lib/public-kb", () => ({
   getPublicTaxonomy: mockGetTaxonomy,
   getPublicDocuments: mockGetDocuments,
   getPublicDocumentsWithContent: mockGetDocumentsWithContent,
+  getPublicDocument: mockGetDocument,
+  isDocInScope: mockIsDocInScope,
 }))
 
 vi.mock("@/lib/public-kb-portal-base", () => ({
@@ -93,6 +99,40 @@ beforeEach(() => {
     { ...DOC, content: "<p>Run it.</p>" },
   ])
   mockHeaders.mockResolvedValue(new Headers({ host: "app.example.com" }))
+})
+
+describe("GET /api/public/llms — single document Markdown", () => {
+  it("serves an in-scope document as text/markdown", async () => {
+    mockGetDocument.mockResolvedValue({ ...DOC, content: "<p>Run it.</p>" })
+    mockIsDocInScope.mockResolvedValue(true)
+
+    const res = await GET(request("portal=acme%2Fhelp&variant=doc&doc=install"))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get("content-type")).toContain("text/markdown")
+    const body = await res.text()
+    expect(body).toContain("# Install")
+    expect(body).toContain("Run it.")
+    expect(mockGetDocument).toHaveBeenCalledWith("ws-1", "install")
+  })
+
+  it("404s a document outside the portal's scope", async () => {
+    mockGetDocument.mockResolvedValue({ ...DOC, content: "<p>Secret</p>" })
+    mockIsDocInScope.mockResolvedValue(false)
+
+    const res = await GET(request("portal=acme&variant=doc&doc=install"))
+
+    expect(res.status).toBe(404)
+    expect(await res.text()).not.toContain("Secret")
+  })
+
+  it("404s a malformed or missing ref without reading", async () => {
+    for (const query of ["portal=acme&variant=doc", "portal=acme&variant=doc&doc=..%2Fx"]) {
+      const res = await GET(request(query))
+      expect(res.status).toBe(404)
+    }
+    expect(mockGetDocument).not.toHaveBeenCalled()
+  })
 })
 
 describe("GET /api/public/llms", () => {

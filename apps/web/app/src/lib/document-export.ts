@@ -422,9 +422,49 @@ function nodeToBlockMarkdown(node: Node, depth = 0): string {
     const hrefAttribute = href ? ` href=${JSON.stringify(href)}` : ""
     const icon = element.getAttribute("data-card-icon")
     const iconAttribute = icon ? ` icon=${JSON.stringify(icon)}` : ""
-    return `{% card title=${title}${hrefAttribute}${iconAttribute} %}\n\n${blockChildren(element, depth)}\n\n{% endcard %}`
+    const eyebrow = element.getAttribute("data-card-eyebrow")
+    const eyebrowAttribute = eyebrow ? ` eyebrow=${JSON.stringify(eyebrow)}` : ""
+    const tone = element.getAttribute("data-card-tone")
+    const toneAttribute = tone ? ` tone=${JSON.stringify(tone)}` : ""
+    return `{% card title=${title}${hrefAttribute}${iconAttribute}${eyebrowAttribute}${toneAttribute} %}\n\n${blockChildren(element, depth)}\n\n{% endcard %}`
   }
-  if (element.hasAttribute("data-card-title") || element.hasAttribute("data-card-glyph")) return ""
+  if (
+    element.hasAttribute("data-card-title") ||
+    element.hasAttribute("data-card-glyph") ||
+    element.hasAttribute("data-card-eyebrow-text")
+  ) return ""
+  if (element.hasAttribute("data-document-steps")) {
+    return `{% steps %}\n\n${blockChildren(element, depth)}\n\n{% endsteps %}`
+  }
+  if (element.hasAttribute("data-document-step")) {
+    const title = JSON.stringify(element.getAttribute("data-document-step") || "Step")
+    const note = element.getAttribute("data-step-note")
+    const noteAttribute = note ? ` note=${JSON.stringify(note)}` : ""
+    return `{% step title=${title}${noteAttribute} %}\n\n${blockChildren(element, depth)}\n\n{% endstep %}`
+  }
+  if (element.hasAttribute("data-step-title") || element.hasAttribute("data-step-note-text")) return ""
+  if (element.hasAttribute("data-step-body")) return blockChildren(element, depth)
+  if (element.hasAttribute("data-document-timeline")) {
+    return `{% timeline %}\n\n${blockChildren(element, depth)}\n\n{% endtimeline %}`
+  }
+  if (element.hasAttribute("data-document-phase")) {
+    const title = JSON.stringify(element.getAttribute("data-document-phase") || "Phase")
+    const label = element.getAttribute("data-phase-label")
+    const labelAttribute = label ? ` label=${JSON.stringify(label)}` : ""
+    const transition = element.getAttribute("data-phase-transition")
+    const transitionAttribute = transition ? ` transition=${JSON.stringify(transition)}` : ""
+    return `{% phase title=${title}${labelAttribute}${transitionAttribute} %}\n\n${blockChildren(element, depth)}\n\n{% endphase %}`
+  }
+  if (
+    element.hasAttribute("data-phase-label-text") ||
+    element.hasAttribute("data-phase-title") ||
+    element.hasAttribute("data-phase-transition-text")
+  ) return ""
+  if (element.hasAttribute("data-phase-body")) return blockChildren(element, depth)
+  if (element.hasAttribute("data-document-formula")) {
+    const expression = (element.getAttribute("data-document-formula") ?? "").replace(/\s+/g, " ").trim()
+    return expression ? `{% formula %}${expression}{% endformula %}` : ""
+  }
   if (element.hasAttribute("data-card-body")) return blockChildren(element, depth)
 
   if (dataType === "math-block") {

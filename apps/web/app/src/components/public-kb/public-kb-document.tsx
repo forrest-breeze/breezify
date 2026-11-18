@@ -17,7 +17,7 @@ import { PortalFooter } from "@/components/public-kb/portal/portal-footer"
 import type { FooterBlock, SidebarBlock } from "@/lib/portal/schema"
 import type { DocumentLinkEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { publicPortalHref } from "@/lib/portal/public-base-path"
+import { publicPortalHref, portalDocMarkdownHref } from "@/lib/portal/public-base-path"
 
 interface PublicKbDocumentProps {
   slug: string
@@ -127,7 +127,11 @@ export function PublicKbDocument({
             {/* The title lives outside the prose container, so it is passed
                 separately — a copied page should start with its own name. */}
             {copyPageEnabled && (
-              <PortalCopyPageButton targetRef={contentRef} heading={title} />
+              <PortalCopyPageButton
+                targetRef={contentRef}
+                heading={title}
+                markdownHref={portalDocMarkdownHref(publicBase, documentId)}
+              />
             )}
           </div>
         </div>

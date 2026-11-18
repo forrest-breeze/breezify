@@ -28,10 +28,9 @@ import {
   withPublicPortalBase,
 } from "@/lib/portal/public-base-path"
 
-// The doc ref accepts either a raw document UUID (back-compat) or a
-// human-readable public_slug. getPublicDocument resolves both and 404s on a
-// miss; this guard only rejects obviously malformed values before the DB hit.
-export const DOC_REF_RE = /^[a-zA-Z0-9][a-zA-Z0-9/_-]{0,199}$/
+import { DOC_REF_RE } from "@/lib/portal/doc-ref"
+
+export { DOC_REF_RE }
 
 function formatDate(value: string | undefined): string {
   if (!value) return ""

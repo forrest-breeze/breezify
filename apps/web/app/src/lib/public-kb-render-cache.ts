@@ -28,10 +28,15 @@ import {
 // The key includes the deployment so a release that changes the renderer or
 // sanitizer never serves HTML produced by older code. Without a deployment id
 // (local dev, other hosts) the revalidate window below is the safety net.
-const RENDERER_REVISION =
+// RENDERER_SCHEMA is bumped by hand whenever the renderer's output changes, so
+// local dev (where there is no deployment id) never serves HTML from older code
+// for up to a day.
+const RENDERER_SCHEMA = "2026-11-18-visual-blocks"
+const RENDERER_REVISION = `${RENDERER_SCHEMA}:${
   process.env.VERCEL_DEPLOYMENT_ID ||
   process.env.VERCEL_GIT_COMMIT_SHA ||
   "local"
+}`
 const PERSISTED_SECONDS = 60 * 60 * 24
 export const PUBLIC_RENDER_CACHE_TAG = "public-kb-render"
 

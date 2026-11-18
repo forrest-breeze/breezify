@@ -12,6 +12,7 @@ import Link from "@tiptap/extension-link"
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight"
 import { TableKit } from "@tiptap/extension-table"
 import { renderDocumentHtml } from "@/lib/render-document-html"
+import { DIRECTIVE_SOURCE, RENDERED_DIRECTIVE } from "@/lib/document-tabs"
 import { DOMParser as ProseMirrorDOMParser } from "@tiptap/pm/model"
 import { Markdown } from "tiptap-markdown"
 import { common, createLowlight } from "lowlight"
@@ -35,6 +36,11 @@ import { MathBlock, MathInline } from "./math-extension"
 import {
   EditableDocumentCard,
   EditableDocumentCards,
+  EditableDocumentFormula,
+  EditableDocumentPhase,
+  EditableDocumentStep,
+  EditableDocumentSteps,
+  EditableDocumentTimeline,
   EditableDocumentTab,
   EditableDocumentTabs,
 } from "./document-blocks-views"
@@ -50,7 +56,6 @@ import { embeddableMediaKind } from "@/lib/storage/media-upload-policy"
 import "@/styles/document-blocks.css"
 
 // Markdown or stored HTML containing tab/card directives (MDX or `{% %}` form).
-const DIRECTIVE_SOURCE = /{%\s*(?:tabs|cards)\s*%}|<(?:Tabs|CardGroup|Cards)[\s>]/
 const lowlight = createLowlight(common)
 
 export interface TiptapEditorRef {
@@ -119,6 +124,11 @@ export const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(
         EditableDocumentTab,
         EditableDocumentCards,
         EditableDocumentCard,
+        EditableDocumentSteps,
+        EditableDocumentStep,
+        EditableDocumentTimeline,
+        EditableDocumentPhase,
+        EditableDocumentFormula,
         StarterKit.configure({
           heading: false,
           codeBlock: false,
@@ -167,6 +177,8 @@ export const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(
               const parent = doc.resolve(pos).parent.type.name
               if (parent === "documentCard") return "Add a description"
               if (parent === "documentTab") return "Tab content…"
+              if (parent === "documentStep") return "Describe this step"
+              if (parent === "documentPhase") return "Describe this phase"
               // Nested placeholders are on (for card/tab bodies); keep other
               // nested paragraphs (lists, quotes, table cells) quiet.
               if (parent !== "doc") return ""
@@ -229,7 +241,7 @@ export const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(
           const text = event.clipboardData?.getData("text/plain") ?? ""
           if (!DIRECTIVE_SOURCE.test(text)) return false
           const html = renderDocumentHtml(text)
-          if (!/data-document-(?:tabs|cards)=/.test(html)) return false
+          if (!RENDERED_DIRECTIVE.test(html)) return false
           const container = document.createElement("div")
           container.innerHTML = html
           const slice = ProseMirrorDOMParser.fromSchema(view.state.schema).parseSlice(container)

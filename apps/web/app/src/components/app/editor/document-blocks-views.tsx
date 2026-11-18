@@ -18,9 +18,19 @@ import {
   SmilePlus,
   Trash2,
 } from "lucide-react"
-import { cardIcon, isSafeCardHref } from "@/lib/document-tabs"
+import { CARD_TONES, cardIcon, cardTone, isSafeCardHref, renderFormulaHtml } from "@/lib/document-tabs"
 import { cn } from "@/lib/utils"
-import { DocumentCard, DocumentCards, DocumentTab, DocumentTabs } from "./document-tabs-extension"
+import {
+  DocumentCard,
+  DocumentCards,
+  DocumentFormula,
+  DocumentPhase,
+  DocumentStep,
+  DocumentSteps,
+  DocumentTab,
+  DocumentTabs,
+  DocumentTimeline,
+} from "./document-tabs-extension"
 
 // Editor-only views for card and tab groups. Titles, links and icons are node
 // attributes, so they're edited through these controls; stored HTML is still
@@ -64,7 +74,7 @@ function deleteItem(editor: Editor, getPos: GetPos, node: ProseMirrorNode) {
   editor.commands.focus()
 }
 
-function appendItem(editor: Editor, getPos: GetPos, group: ProseMirrorNode, type: "documentCard" | "documentTab", title: string) {
+function appendItem(editor: Editor, getPos: GetPos, group: ProseMirrorNode, type: "documentCard" | "documentTab" | "documentStep" | "documentPhase", title: string) {
   const pos = getPos()
   if (typeof pos !== "number") return
   const { schema } = editor
@@ -223,14 +233,17 @@ function DocumentCardView({ editor, getPos, node, updateAttributes }: NodeViewPr
   const title: string = node.attrs.title ?? ""
   const href: string = node.attrs.href ?? ""
   const icon = cardIcon(node.attrs.icon)
+  const eyebrow: string = node.attrs.eyebrow ?? ""
+  const tone = cardTone(node.attrs.tone)
   const [linkOpen, setLinkOpen] = useState(false)
   const showLink = linkOpen || href !== ""
   const invalidHref = href.trim() !== "" && !isSafeCardHref(href)
   const editable = editor.isEditable
   return (
-    <NodeViewWrapper data-document-card={title} className="group/item">
+    <NodeViewWrapper data-document-card={title} data-card-tone={tone ?? undefined} className="group/item">
       {editable ? (
         <ItemToolbar>
+          <ToneSelect value={tone} onChange={(next) => updateAttributes({ tone: next })} />
           <ToolbarButton label={href ? "Edit link" : "Add link"} onClick={() => setLinkOpen((value) => !value)}>
             <Link2 className="size-3.5" />
           </ToolbarButton>
@@ -245,6 +258,17 @@ function DocumentCardView({ editor, getPos, node, updateAttributes }: NodeViewPr
           <IconPicker icon={icon} onChange={(next) => updateAttributes({ icon: next })} />
         ) : icon ? (
           <span data-card-glyph="">{icon}</span>
+        ) : null}
+        {editable || eyebrow ? (
+          <input
+            aria-label="Card eyebrow"
+            data-card-eyebrow-field=""
+            readOnly={!editable}
+            className={cn(fieldClass, "pr-28", !eyebrow && "opacity-0 group-hover/item:opacity-100 group-focus-within/item:opacity-100 focus:opacity-100")}
+            placeholder="Eyebrow label (optional)"
+            value={eyebrow}
+            onChange={(event) => updateAttributes({ eyebrow: event.target.value || null })}
+          />
         ) : null}
         <input
           aria-label="Card title"
@@ -274,6 +298,186 @@ function DocumentCardView({ editor, getPos, node, updateAttributes }: NodeViewPr
         ) : null}
       </div>
       <NodeViewContent data-card-body="" className="mt-1" />
+    </NodeViewWrapper>
+  )
+}
+
+function ToneSelect({ value, onChange }: { value: string | null; onChange: (tone: string | null) => void }) {
+  return (
+    <select
+      aria-label="Card color"
+      title="Card color"
+      value={value ?? ""}
+      onChange={(event) => onChange(event.target.value || null)}
+      className="h-6 rounded border-0 bg-transparent px-1 text-xs text-muted-foreground outline-none hover:bg-accent"
+    >
+      <option value="">Accent</option>
+      {CARD_TONES.map((tone) => (
+        <option key={tone} value={tone}>
+          {tone[0].toUpperCase() + tone.slice(1)}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+function AddItemButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      contentEditable={false}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+    >
+      <Plus className="size-3.5" /> {label}
+    </button>
+  )
+}
+
+function OrderedItemToolbar({ editor, getPos, node, noun }: Pick<NodeViewProps, "editor" | "getPos" | "node"> & { noun: string }) {
+  const { index, count } = siblingInfo(editor, getPos)
+  return (
+    <ItemToolbar>
+      <ToolbarButton label="Move up" disabled={index === 0} onClick={() => moveSibling(editor, getPos, node, -1)}>
+        <ArrowUp className="size-3.5" />
+      </ToolbarButton>
+      <ToolbarButton label="Move down" disabled={index >= count - 1} onClick={() => moveSibling(editor, getPos, node, 1)}>
+        <ArrowDown className="size-3.5" />
+      </ToolbarButton>
+      <ToolbarButton label={`Delete ${noun}`} danger onClick={() => deleteItem(editor, getPos, node)}>
+        <Trash2 className="size-3.5" />
+      </ToolbarButton>
+      <DragHandle />
+    </ItemToolbar>
+  )
+}
+
+// ── Steps ───────────────────────────────────────────────────────────
+
+function DocumentStepsView({ editor, getPos, node }: NodeViewProps) {
+  return (
+    <NodeViewWrapper className="my-6">
+      <NodeViewContent data-document-steps="" className="!my-0" />
+      {editor.isEditable ? <AddItemButton label="Add step" onClick={() => appendItem(editor, getPos, node, "documentStep", "New step")} /> : null}
+    </NodeViewWrapper>
+  )
+}
+
+function DocumentStepView({ editor, getPos, node, updateAttributes }: NodeViewProps) {
+  const title: string = node.attrs.title ?? ""
+  const note: string = node.attrs.note ?? ""
+  const editable = editor.isEditable
+  const { index } = siblingInfo(editor, getPos)
+  return (
+    <NodeViewWrapper data-document-step={title} className="group/item relative" style={{ counterSet: `document-step ${index + 1}` }}>
+      {editable ? <OrderedItemToolbar editor={editor} getPos={getPos} node={node} noun="step" /> : null}
+      <div contentEditable={false}>
+        <input
+          aria-label="Step title"
+          readOnly={!editable}
+          className={cn(fieldClass, "pr-28 font-semibold")}
+          placeholder="Step title"
+          value={title}
+          onChange={(event) => updateAttributes({ title: event.target.value })}
+        />
+      </div>
+      <NodeViewContent data-step-body="" className="mt-1" />
+      {editable || note ? (
+        <div contentEditable={false}>
+          <input
+            aria-label="Step note"
+            data-step-note-field=""
+            readOnly={!editable}
+            className={cn(fieldClass, "w-auto min-w-[16rem]", !note && "opacity-0 group-hover/item:opacity-100 group-focus-within/item:opacity-100 focus:opacity-100")}
+            placeholder="Note or formula (optional)"
+            value={note}
+            onChange={(event) => updateAttributes({ note: event.target.value || null })}
+          />
+        </div>
+      ) : null}
+    </NodeViewWrapper>
+  )
+}
+
+// ── Timeline ────────────────────────────────────────────────────────
+
+function DocumentTimelineView({ editor, getPos, node }: NodeViewProps) {
+  return (
+    <NodeViewWrapper className="my-6">
+      <NodeViewContent data-document-timeline="" className="!my-0" />
+      {editor.isEditable ? <AddItemButton label="Add phase" onClick={() => appendItem(editor, getPos, node, "documentPhase", "New phase")} /> : null}
+    </NodeViewWrapper>
+  )
+}
+
+function DocumentPhaseView({ editor, getPos, node, updateAttributes }: NodeViewProps) {
+  const title: string = node.attrs.title ?? ""
+  const label: string = node.attrs.label ?? ""
+  const transition: string = node.attrs.transition ?? ""
+  const editable = editor.isEditable
+  const hidden = "opacity-0 group-hover/item:opacity-100 group-focus-within/item:opacity-100 focus:opacity-100"
+  return (
+    <NodeViewWrapper data-document-phase={title} className="group/item relative !mb-4">
+      {editable ? <OrderedItemToolbar editor={editor} getPos={getPos} node={node} noun="phase" /> : null}
+      <div contentEditable={false}>
+        {editable || label ? (
+          <input
+            aria-label="Phase label"
+            data-phase-label-field=""
+            readOnly={!editable}
+            className={cn(fieldClass, "w-auto", !label && hidden)}
+            placeholder="Label, e.g. Week 1–2"
+            value={label}
+            onChange={(event) => updateAttributes({ label: event.target.value || null })}
+          />
+        ) : null}
+        <input
+          aria-label="Phase title"
+          readOnly={!editable}
+          className={cn(fieldClass, "pr-28 font-semibold")}
+          placeholder="Phase title"
+          value={title}
+          onChange={(event) => updateAttributes({ title: event.target.value })}
+        />
+      </div>
+      <NodeViewContent data-phase-body="" className="mt-1" />
+      {editable || transition ? (
+        <div contentEditable={false} className="mt-2 border-t border-dashed border-border pt-2 text-xs text-muted-foreground">
+          <input
+            aria-label="Transition to next phase"
+            readOnly={!editable}
+            className={cn(fieldClass, "text-xs", !transition && hidden)}
+            placeholder="↓ Transition to the next phase (optional)"
+            value={transition}
+            onChange={(event) => updateAttributes({ transition: event.target.value || null })}
+          />
+        </div>
+      ) : null}
+    </NodeViewWrapper>
+  )
+}
+
+// ── Formula ─────────────────────────────────────────────────────────
+
+function DocumentFormulaView({ editor, node, updateAttributes, selected }: NodeViewProps) {
+  const expression: string = node.attrs.expression ?? ""
+  const editable = editor.isEditable
+  // renderFormulaHtml escapes every term, so the preview carries no markup from input.
+  const preview = renderFormulaHtml(expression)
+  return (
+    <NodeViewWrapper className={cn("group/item my-6 rounded-lg", selected && "ring-2 ring-ring/40")}>
+      <div contentEditable={false} dangerouslySetInnerHTML={{ __html: preview }} className="[&>[data-document-formula]]:!my-0" />
+      {editable ? (
+        <input
+          aria-label="Formula"
+          contentEditable={false}
+          className={cn(fieldClass, "mt-2 font-mono text-xs text-muted-foreground", "opacity-0 group-hover/item:opacity-100 group-focus-within/item:opacity-100 focus:opacity-100")}
+          placeholder="Term | caption × Term | caption = Result"
+          value={expression}
+          onChange={(event) => updateAttributes({ expression: event.target.value })}
+        />
+      ) : null}
     </NodeViewWrapper>
   )
 }
@@ -355,5 +559,35 @@ export const EditableDocumentTabs = DocumentTabs.extend({
 export const EditableDocumentTab = DocumentTab.extend({
   addNodeView() {
     return ReactNodeViewRenderer(DocumentTabView)
+  },
+})
+
+export const EditableDocumentSteps = DocumentSteps.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(DocumentStepsView)
+  },
+})
+
+export const EditableDocumentStep = DocumentStep.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(DocumentStepView)
+  },
+})
+
+export const EditableDocumentTimeline = DocumentTimeline.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(DocumentTimelineView)
+  },
+})
+
+export const EditableDocumentPhase = DocumentPhase.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(DocumentPhaseView)
+  },
+})
+
+export const EditableDocumentFormula = DocumentFormula.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(DocumentFormulaView)
   },
 })

@@ -16,7 +16,7 @@
 // Node built-in.
 // ---------------------------------------------------------------------------
 
-export type PortalLlmsVariant = "index" | "full"
+export type PortalLlmsVariant = "index" | "full" | "doc"
 
 export const PORTAL_LLMS_API_PATH = "/api/public/llms"
 
@@ -33,6 +33,38 @@ export interface PortalLlmsTarget {
   /** Portal base path without the `/p/` mount: `<ws>` or `<ws>/<project>`. */
   base: string
   variant: PortalLlmsVariant
+  /** For `variant: "doc"`: the document ref (public slug or id), without `.md`. */
+  doc?: string
+}
+
+const MARKDOWN_SUFFIX = ".md"
+
+/**
+ * `/p/<ws>[/<project>]/doc/<ref>.md` — one document as markdown, the target of
+ * the portal's "View as Markdown" / "Open in …" actions. The ref may itself
+ * contain slashes (nested public slugs).
+ */
+function parsePortalDocMarkdownPath(segments: string[]): PortalLlmsTarget | null {
+  const last = segments[segments.length - 1]
+  if (!last.toLowerCase().endsWith(MARKDOWN_SUFFIX)) return null
+  // [p, ws, doc, ...ref] or [p, ws, project, doc, ...ref]
+  const docIndex = segments[2] === "doc" ? 2 : segments[3] === "doc" ? 3 : -1
+  if (docIndex === -1 || segments.length <= docIndex + 1) return null
+  const refSegments = segments.slice(docIndex + 1)
+  const tail = refSegments[refSegments.length - 1]
+  refSegments[refSegments.length - 1] = tail.slice(0, -MARKDOWN_SUFFIX.length)
+  if (!refSegments[refSegments.length - 1]) return null
+  let doc: string
+  try {
+    doc = refSegments.map(decodeURIComponent).join("/")
+  } catch {
+    return null
+  }
+  return {
+    base: segments.slice(1, docIndex).join("/"),
+    variant: "doc",
+    doc,
+  }
 }
 
 /**
@@ -43,6 +75,9 @@ export interface PortalLlmsTarget {
 export function parsePortalLlmsPath(pathname: string): PortalLlmsTarget | null {
   const segments = pathname.split("/").filter(Boolean)
   if (segments.length < 3 || segments[0] !== "p") return null
+
+  const markdown = parsePortalDocMarkdownPath(segments)
+  if (markdown) return markdown
 
   const variant = FILENAME_VARIANTS[segments[segments.length - 1].toLowerCase()]
   if (!variant) return null
@@ -59,7 +94,8 @@ export function parsePortalLlmsPath(pathname: string): PortalLlmsTarget | null {
 /** Internal API URL (path + query) that serves a parsed llms.txt request. */
 export function portalLlmsApiSearch(target: PortalLlmsTarget): string {
   const params = new URLSearchParams({ portal: target.base })
-  if (target.variant === "full") params.set("variant", "full")
+  if (target.variant !== "index") params.set("variant", target.variant)
+  if (target.variant === "doc" && target.doc) params.set("doc", target.doc)
   return params.toString()
 }
 

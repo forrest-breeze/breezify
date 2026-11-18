@@ -3,6 +3,7 @@ import MarkdownIt from "markdown-it"
 import { looksLikeHtml } from "@/lib/html-detection"
 import { sanitizeElementTree } from "@/lib/sanitize-dom"
 import { hasDirectiveText, repairDirectiveParagraphs } from "@/lib/repair-document-directives"
+import { enhanceCallouts } from "@/lib/document-callouts"
 
 // Shared, dependency-free rendering for stored document bodies. Documents are
 // persisted as sanitized HTML (with a Markdown fallback for plain-text/legacy
@@ -26,6 +27,7 @@ function sanitizeHtml(value: string): string {
 
   const parsed = new DOMParser().parseFromString(value, "text/html")
   if (hasDirectiveText(value)) repairDirectiveParagraphs(parsed.body, (source) => markdown.render(source))
+  enhanceCallouts(parsed.body)
   return sanitizeElementTree(parsed.body)
 }
 
@@ -44,5 +46,10 @@ export function renderDocumentHtml(value: string): string {
     return sanitizeHtml(value)
   }
 
-  return renderDocumentTabs(value, (source) => markdown.render(source))
+  const html = renderDocumentTabs(value, (source) => markdown.render(source))
+  // Markdown output is trusted (html: false), but callouts still need the DOM pass.
+  if (typeof DOMParser === "undefined" || !/<blockquote/.test(html)) return html
+  const parsed = new DOMParser().parseFromString(html, "text/html")
+  enhanceCallouts(parsed.body)
+  return parsed.body.innerHTML
 }
