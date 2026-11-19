@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const harness = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
+  hostedDocs: undefined as
+    | { source: { format: string; publish_mode: string } }
+    | undefined,
   clearMutationError: vi.fn(),
   commitSelected: vi.fn(),
   refreshDiff: vi.fn(),
@@ -14,6 +17,10 @@ const harness = vi.hoisted(() => ({
 
 vi.mock("@/components/app/workspace-changes-context", () => ({
   useWorkspaceChanges: () => harness.value,
+}))
+
+vi.mock("@/hooks/swr", () => ({
+  useGithubHostedDocs: () => ({ data: harness.hostedDocs }),
 }))
 
 vi.mock("@/components/app/workspace-github-publish", () => ({
@@ -50,6 +57,7 @@ beforeEach(() => {
   harness.refreshDiff.mockReset().mockResolvedValue(undefined)
   harness.revertSelected.mockReset().mockResolvedValue(true)
   harness.value = baseValue()
+  harness.hostedDocs = undefined
 })
 
 describe("WorkspaceChangesCommitPanel", () => {
@@ -84,6 +92,22 @@ describe("WorkspaceChangesCommitPanel", () => {
     )
 
     expect(harness.revertSelected).toHaveBeenCalledOnce()
+  })
+
+  it("does not offer a revert the ReadMe-format endpoint would refuse", () => {
+    harness.hostedDocs = {
+      source: { format: "readme", publish_mode: "direct" },
+    }
+    render(<WorkspaceChangesCommitPanel />)
+
+    expect(screen.queryByRole("button", { name: "Revert" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Commit" })).toBeEnabled()
+    expect(
+      screen.getByText(/Single files can't be reverted/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: "GitHub settings" }),
+    ).toHaveAttribute("href", "/settings/integrations/github")
   })
 
   it("leaves the diff pane as the only loading bar while warming", () => {

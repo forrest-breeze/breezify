@@ -43,6 +43,7 @@ import { useGithubHostedDocs } from "@/hooks/swr"
 import {
   bootstrapGithubHostedDocsSource,
   disableGithubHostedDocsSource,
+  reimportGithubHostedDocsSource,
   saveGithubHostedDocsSource,
 } from "@/lib/github/api/github-integrations"
 import type {
@@ -59,7 +60,7 @@ interface FolderNode {
 
 type ReconciliationMode = "merge" | "breezify_wins" | "github_wins"
 type ProposalKind = "create" | "breezify_wins"
-type HostedDocsAction = "link" | "create" | "open_pr" | "disable"
+type HostedDocsAction = "link" | "create" | "open_pr" | "disable" | "reimport"
 
 export function expandedPathsForSelection(paths: string[]): Set<string> {
   const expanded = new Set<string>()
@@ -370,6 +371,26 @@ export function GithubHostedDocsCard({
             : "Pull request opened to make the selected Markdown tree match Breezify.",
         )
         await Promise.all([mutate(), mutateTree()])
+      }
+    } catch {
+      setError("Could not reach the server. Try again shortly.")
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  const reimport = async (): Promise<void> => {
+    setPendingAction("reimport")
+    setError("")
+    try {
+      const result = await reimportGithubHostedDocsSource()
+      if (result.error) {
+        setError(result.error)
+      } else {
+        setMessage(
+          "Re-importing from GitHub. Pages you haven't edited in Breezify are refreshed; edited pages are kept for review.",
+        )
+        await mutate()
       }
     } catch {
       setError("Could not reach the server. Try again shortly.")
@@ -744,7 +765,18 @@ export function GithubHostedDocsCard({
             ) : null}
 
             {source ? (
-              <div className="flex justify-start">
+              <div className="flex flex-wrap justify-start gap-2">
+                <div className="space-y-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || source.sync_status === "syncing" || source.sync_status === "pending"}
+                    onClick={() => void reimport()}
+                    aria-busy={pendingAction === "reimport"}
+                  >
+                    {pendingAction === "reimport" ? "Starting re-import…" : "Re-import from GitHub"}
+                  </Button>
+                </div>
                 <div className="space-y-1.5">
                   <Button
                     variant="ghost"

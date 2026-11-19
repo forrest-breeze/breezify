@@ -181,6 +181,16 @@ export async function bootstrapGithubHostedDocsSource(input: {
   }
 }
 
+/** Re-import the linked docs root from GitHub (merge; Breezify edits are kept). */
+export async function reimportGithubHostedDocsSource(): Promise<{ error?: string }> {
+  const res = await fetch("/api/github/hosted-docs", { method: "POST" })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string }
+    return { error: body.error ?? "Could not start the re-import." }
+  }
+  return {}
+}
+
 export async function disableGithubHostedDocsSource(): Promise<{ error?: string }> {
   const res = await fetch("/api/github/hosted-docs", { method: "DELETE" })
   if (!res.ok) {

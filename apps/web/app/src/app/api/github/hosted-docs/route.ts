@@ -830,6 +830,40 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   }
 }
 
+/**
+ * Re-import the linked root even though GitHub has not changed, so pages pick
+ * up converter improvements. Always merges: Breezify edits are kept for review.
+ */
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  const auth = await requireAdmin()
+  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const admin = createAdminClient()
+  try {
+    const { data, error } = await admin
+      .from('github_hosted_docs_sources')
+      .select('*')
+      .eq('workspace_id', auth.workspaceId)
+      .maybeSingle()
+    if (error) throw error
+    const source = (data as GitHubHostedDocsSourceRow | null) ?? null
+    if (!source || source.sync_status === 'disabled') {
+      return NextResponse.json({ error: 'No linked GitHub docs to re-import.' }, { status: 409 })
+    }
+    if (source.sync_status === 'syncing' || source.sync_status === 'pending') {
+      return NextResponse.json({ error: 'A sync is already running.' }, { status: 409 })
+    }
+    scheduleHostedDocsSync(
+      { ...hostedTarget(source), mode: 'merge', force: true },
+      request.nextUrl.origin,
+      'forced hosted docs re-import failed',
+    )
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    console.error('[Breezify] POST /api/github/hosted-docs failed:', err)
+    return NextResponse.json({ error: 'Could not start the re-import.' }, { status: 500 })
+  }
+}
+
 export async function DELETE(_request: NextRequest): Promise<NextResponse> {
   const auth = await requireAdmin()
   if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

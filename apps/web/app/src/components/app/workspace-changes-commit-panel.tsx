@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import {
   AlertTriangle,
   CheckCircle2,
@@ -46,9 +47,12 @@ export function WorkspaceChangesCommitPanel(): React.ReactElement {
     "commit" | "revert" | null
   >(null)
   const { data: hostedDocs } = useGithubHostedDocs()
+  const readmeFormat = hostedDocs?.source?.format === "readme"
   const directCommit =
-    hostedDocs?.source?.format === "readme" &&
-    hostedDocs.source.publish_mode === "direct"
+    readmeFormat && hostedDocs?.source?.publish_mode === "direct"
+  // The revert endpoint refuses ReadMe-format links (no per-file revert), so
+  // the action is not offered there; "Use GitHub" in Settings discards instead.
+  const canRevertFiles = !readmeFormat
 
   // Preserve setup, sync, and error recovery controls until an exact diff is
   // available. The publish-all button never renders once files can be staged.
@@ -100,39 +104,61 @@ export function WorkspaceChangesCommitPanel(): React.ReactElement {
           </Button>
         </div>
       ) : files.length > 0 ? (
-        <div className="grid grid-cols-2 gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={
-              selectedCount === 0 || !selectedCanRevert || mutation !== null
+        <div className="space-y-2">
+          <div
+            className={
+              canRevertFiles ? "grid grid-cols-2 gap-2" : "grid grid-cols-1"
             }
-            title={
-              selectedCanRevert
-                ? "Make the staged Breezify files match GitHub"
-                : "One or more staged files cannot be safely reverted from this diff"
-            }
-            onClick={() => {
-              clearMutationError()
-              setConfirmation("revert")
-            }}
           >
-            <RotateCcw className="size-3.5" />
-            Revert
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={selectedCount === 0 || mutation !== null}
-            onClick={() => {
-              clearMutationError()
-              setConfirmation("commit")
-            }}
-          >
-            <GitCommitHorizontal className="size-3.5" />
-            Commit
-          </Button>
+            {canRevertFiles ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={
+                  selectedCount === 0 || !selectedCanRevert || mutation !== null
+                }
+                title={
+                  selectedCanRevert
+                    ? "Make the staged Breezify files match GitHub"
+                    : "One or more staged files cannot be safely reverted from this diff"
+                }
+                onClick={() => {
+                  clearMutationError()
+                  setConfirmation("revert")
+                }}
+              >
+                <RotateCcw className="size-3.5" />
+                Revert
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              disabled={selectedCount === 0 || mutation !== null}
+              onClick={() => {
+                clearMutationError()
+                setConfirmation("commit")
+              }}
+            >
+              <GitCommitHorizontal className="size-3.5" />
+              Commit
+            </Button>
+          </div>
+          {canRevertFiles ? null : (
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              Single files can&apos;t be reverted in a ReadMe-format repository.
+              To discard every workspace change, choose &quot;Use GitHub&quot;
+              in{" "}
+              <Link
+                href="/settings/integrations/github"
+                className="font-medium underline underline-offset-2 hover:text-foreground"
+              >
+                GitHub settings
+              </Link>
+              .
+            </p>
+          )}
         </div>
       ) : (
         <div className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-border text-xs text-muted-foreground">
