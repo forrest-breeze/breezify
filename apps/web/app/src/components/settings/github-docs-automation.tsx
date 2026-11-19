@@ -54,6 +54,21 @@ const CHECK_MODES: Array<{ value: DocsCheckMode; label: string }> = [
   { value: "blocking", label: "Blocking" },
 ]
 
+const CHECKS: Array<{ key: keyof DocsChecksSettings; title: string; description: string }> = [
+  {
+    key: "brokenLinks",
+    title: "Broken links",
+    description:
+      "Check every commit and pull request in the linked repository for links to docs pages or files that do not exist. Warning reports them; Blocking fails the check. External URLs are not fetched.",
+  },
+  {
+    key: "formatting",
+    title: "Formatting",
+    description:
+      "Check every commit and pull request for pages Breezify cannot read: frontmatter that is not valid YAML, code blocks and components that are never closed, merge conflict markers, _order.yaml entries for pages that do not exist, and OpenAPI files that do not parse. Writing style is not checked.",
+  },
+]
+
 function SettingRow({
   title,
   description,
@@ -194,29 +209,30 @@ export function GithubDocsAutomationSettings({
       <section className="max-w-3xl space-y-2">
         <h3 className="text-sm font-medium">Pull request checks</h3>
         <div className="divide-y rounded-lg border">
-          <SettingRow
-            title="Broken links"
-            description="Check every commit and pull request in the linked repository for links to docs pages or files that do not exist. Warning reports them; Blocking fails the check. External URLs are not fetched."
-          >
-            <Select
-              value={checks.brokenLinks}
-              disabled={locked}
-              onValueChange={(value) => void save({ checks: { ...checks, brokenLinks: value as DocsCheckMode } })}
-            >
-              <SelectTrigger className="w-40" aria-label="Broken links check">
-                <SelectValue>
-                  {CHECK_MODES.find((mode) => mode.value === checks.brokenLinks)?.label}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {CHECK_MODES.map((mode) => (
-                  <SelectItem key={mode.value} value={mode.value}>
-                    {mode.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingRow>
+          {CHECKS.map((check) => (
+            <SettingRow key={check.key} title={check.title} description={check.description}>
+              <Select
+                value={checks[check.key]}
+                disabled={locked}
+                onValueChange={(value) =>
+                  void save({ checks: { ...checks, [check.key]: value as DocsCheckMode } })
+                }
+              >
+                <SelectTrigger className="w-40" aria-label={`${check.title} check`}>
+                  <SelectValue>
+                    {CHECK_MODES.find((mode) => mode.value === checks[check.key])?.label}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {CHECK_MODES.map((mode) => (
+                    <SelectItem key={mode.value} value={mode.value}>
+                      {mode.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SettingRow>
+          ))}
         </div>
       </section>
 

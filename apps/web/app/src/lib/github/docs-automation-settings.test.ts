@@ -21,7 +21,7 @@ describe('docs automation settings', () => {
       draftPullRequests: false,
       coAuthors: false,
     })
-    expect(DEFAULT_DOCS_CHECKS).toEqual({ brokenLinks: 'disabled' })
+    expect(DEFAULT_DOCS_CHECKS).toEqual({ brokenLinks: 'disabled', formatting: 'disabled' })
   })
 
   it('round-trips through the stored shape', () => {
@@ -31,7 +31,7 @@ describe('docs automation settings', () => {
       draftPullRequests: true,
       coAuthors: true,
     }
-    const checks = { brokenLinks: 'blocking' as const }
+    const checks = { brokenLinks: 'blocking' as const, formatting: 'warning' as const }
     const settings = {
       github_publishing: storedGithubPublishing(publishing),
       docs_checks: storedDocsChecks(checks),
@@ -43,7 +43,7 @@ describe('docs automation settings', () => {
   it('falls back to safe values for anything it does not recognise', () => {
     const settings = {
       github_publishing: { merge_method: 'force-push', auto_publish: 'true', co_authors: 1 },
-      docs_checks: { broken_links: 'fatal' },
+      docs_checks: { broken_links: 'fatal', formatting: true },
     }
     expect(getGithubPublishingSettings(settings)).toEqual(DEFAULT_GITHUB_PUBLISHING)
     expect(getDocsChecksSettings(settings)).toEqual(DEFAULT_DOCS_CHECKS)
@@ -60,7 +60,7 @@ describe('docs automation settings', () => {
       draft_pull_requests: false,
       co_authors: false,
     })
-    expect(saved.docs_checks).toEqual({ broken_links: 'warning' })
+    expect(saved.docs_checks).toEqual({ broken_links: 'warning', formatting: 'disabled' })
     const untouched = normalizeWorkspaceSettings({}) as Record<string, unknown>
     expect(untouched).not.toHaveProperty('github_publishing')
     expect(untouched).not.toHaveProperty('docs_checks')

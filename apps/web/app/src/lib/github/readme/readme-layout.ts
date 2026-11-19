@@ -38,6 +38,8 @@ export const README_ORDER_FILE = '_order.yaml'
 export const README_FOLDER_KIND = 'github_readme_folder'
 export const README_MAX_PAGES = 1000
 export const README_MAX_PAGE_BYTES = 512 * 1024
+/** Largest OpenAPI definition under `reference/` that is read. */
+export const README_MAX_SPEC_BYTES = 2 * 1024 * 1024
 /** ReadMe's sidebar nests five levels; allow some slack for the section root. */
 export const README_MAX_DEPTH = 8
 

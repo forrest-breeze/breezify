@@ -10,7 +10,11 @@ import {
   handleGitHubDocsCheck,
 } from '@/lib/github/github-docs-check'
 import { extractDocsLinkCheckInfo } from '@/lib/github/docs-link-check'
-import { handleDocsLinkCheck } from '@/lib/github/docs-link-check.server'
+import { extractDocsFormatCheckInfo } from '@/lib/github/docs-format-check'
+import {
+  handleReadmeDocsChecks,
+  type ReadmeDocsCheck,
+} from '@/lib/github/docs-checks.server'
 import { getTokenCache } from '@/lib/github/token-cache-factory'
 import { markGitHubDocumentPullRequestState } from '@/lib/github/github-document-sync'
 import { recordWebhookDelivery } from '@/lib/api/webhook-dedup'
@@ -70,7 +74,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const eventType = request.headers.get('x-github-event') ?? ''
   const pushInfo = extractRepositoryPushInfo(eventType, payload)
   const docsCheckInfo = extractGitHubDocsCheckInfo(eventType, payload)
+  // The checks on a ReadMe-format repository. A new check suite asks for both;
+  // "Re-run" on one of them asks for that one.
   const linkCheckInfo = extractDocsLinkCheckInfo(eventType, payload)
+  const formatCheckInfo = extractDocsFormatCheckInfo(eventType, payload)
+  const readmeChecksInfo = linkCheckInfo ?? formatCheckInfo
+  const readmeChecks: ReadmeDocsCheck[] = [
+    ...(linkCheckInfo ? (['links'] as const) : []),
+    ...(formatCheckInfo ? (['format'] as const) : []),
+  ]
   // A ReadMe-format docs link can follow a branch other than the default.
   const branchPushInfo = pushInfo ? null : extractHostedBranchPush(eventType, payload)
   const installationTokenScopeChanged =
@@ -90,7 +102,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     !pushInfo &&
     !branchPushInfo &&
     !docsCheckInfo &&
-    !linkCheckInfo &&
+    !readmeChecksInfo &&
     !tokenScopeInstallationId
   ) {
     // Not an event we care about — acknowledge and exit.
@@ -116,12 +128,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Start the check immediately. If another handler on the same delivery is
     // slow, it must not consume the serverless window before the required
     // status is created and completed.
-    // Broken links between docs pages, for ReadMe-format links that turned the
-    // check on. Independent of the format check above: one failing must not
-    // stop the other from reporting.
-    const linkCheckTask = linkCheckInfo
-      ? handleDocsLinkCheck(linkCheckInfo).catch((err) => {
-          logWebhookFailure('[Breezify] GitHub docs link check failed:', err)
+    // Broken links and formatting problems, for ReadMe-format links that
+    // turned those checks on. Independent of the Breezify-format check below:
+    // one failing must not stop the other from reporting.
+    const readmeChecksTask = readmeChecksInfo
+      ? handleReadmeDocsChecks(readmeChecksInfo, readmeChecks).catch((err) => {
+          logWebhookFailure('[Breezify] GitHub ReadMe docs checks failed:', err)
         })
       : Promise.resolve()
     const docsCheckTask = docsCheckInfo
@@ -149,7 +161,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       logWebhookFailure('[Breezify] GitHub webhook handler failed:', err)
     }
 
-    await Promise.all([docsCheckTask, linkCheckTask])
+    await Promise.all([docsCheckTask, readmeChecksTask])
   })
 
   return NextResponse.json({ ok: true })

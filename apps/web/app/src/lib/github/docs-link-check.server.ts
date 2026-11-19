@@ -1,45 +1,31 @@
 import 'server-only'
 
-import { createAdminClient } from '@/lib/supabase/admin'
-import { loadDocsAutomationSettings } from './docs-automation.server'
+import {
+  readDocsCheckFiles,
+  type DocsCheckSnapshot,
+} from './docs-check-snapshot.server'
 import type { DocsCheckMode } from './docs-automation-settings'
 import {
-  DOCS_LINK_CHECK_NAME,
   docsLinkCheckPagePaths,
   findBrokenDocsLinks,
   type BrokenDocsLink,
-  type DocsLinkCheckInfo,
 } from './docs-link-check'
-import {
-  getInstallationToken,
-  getRepositoryBlob,
-  getRepositoryCommit,
-  getRepositoryTree,
-} from './github'
-import {
-  createGitHubCheckRun,
-  type GitHubCheckAnnotation,
-  type GitHubCheckOutput,
-  type GitHubWritableCheckRunConclusion,
+import type {
+  GitHubCheckAnnotation,
+  GitHubCheckOutput,
+  GitHubWritableCheckRunConclusion,
 } from './github-checks'
-import { readmeRootFromPaths } from './readme/readme-layout'
-import { withGitHubRetry } from './retry'
 
 // ---------------------------------------------------------------------------
 // The "Docs links" check: reports broken links between docs pages on every
-// commit GitHub asks checks for (which covers pull requests). Runs only for a
-// ReadMe-format link whose workspace turned the check on.
+// commit GitHub asks checks for (which covers pull requests). Run by
+// `handleReadmeDocsChecks` for a workspace that turned the check on.
 // ---------------------------------------------------------------------------
 
-const BLOB_FETCH_CONCURRENCY = 6
 const MAX_PAGES = 600
 const MAX_PAGE_BYTES = 512 * 1024
 const MAX_ANNOTATIONS = 50
 const MAX_LISTED = 40
-
-export type DocsLinkCheckResult =
-  | { status: 'ignored'; reason: 'unlinked' | 'disabled' }
-  | { status: 'reported'; checkRunId: number; brokenLinks: number; conclusion: string }
 
 /** The check's conclusion and report for a set of broken links. */
 export function docsLinkCheckReport(
@@ -89,88 +75,29 @@ export function docsLinkCheckReport(
   }
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  fn: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const output = new Array<R>(values.length)
-  let next = 0
-  const worker = async (): Promise<void> => {
-    while (next < values.length) {
-      const index = next++
-      output[index] = await fn(values[index]!)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, () => worker()))
-  return output
-}
-
-export async function handleDocsLinkCheck(info: DocsLinkCheckInfo): Promise<DocsLinkCheckResult> {
-  const admin = createAdminClient()
-  const { data, error } = await admin
-    .from('github_hosted_docs_sources')
-    .select('workspace_id, paths, format, sync_status')
-    .eq('installation_id', info.installationId)
-    .eq('repo_id', info.repoId)
-  if (error) throw new Error(`docs link check source lookup: ${error.message}`)
-  const source = ((data ?? []) as Array<{
-    workspace_id: string
-    paths: string[]
-    format: string | null
-    sync_status: string
-  }>).find((row) => row.format === 'readme' && row.sync_status !== 'disabled')
-  if (!source) return { status: 'ignored', reason: 'unlinked' }
-
-  const { checks } = await loadDocsAutomationSettings(admin, source.workspace_id)
-  if (checks.brokenLinks === 'disabled') return { status: 'ignored', reason: 'disabled' }
-
-  const root = readmeRootFromPaths(source.paths)
-  const token = await withGitHubRetry(() => getInstallationToken(info.installationId))
-  const commit = await withGitHubRetry(() =>
-    getRepositoryCommit(token, info.repoFullName, info.headSha),
-  )
-  const tree = await withGitHubRetry(() =>
-    getRepositoryTree(token, info.repoFullName, commit.commit.tree.sha),
-  )
-  const blobs = tree.tree.filter((entry) => entry.type === 'blob')
-  const shaByPath = new Map(blobs.map((entry) => [entry.path, entry]))
-  const allPagePaths = docsLinkCheckPagePaths(shaByPath.keys(), root)
+/** Check the links in the docs at the snapshot's commit. */
+export async function runDocsLinkCheck(
+  snapshot: DocsCheckSnapshot,
+  mode: Exclude<DocsCheckMode, 'disabled'>,
+): Promise<{ conclusion: GitHubWritableCheckRunConclusion; output: GitHubCheckOutput }> {
+  const allPagePaths = docsLinkCheckPagePaths(snapshot.sizes.keys(), snapshot.root)
   const pagePaths = allPagePaths.slice(0, MAX_PAGES)
   const pages = (
-    await mapWithConcurrency(pagePaths, BLOB_FETCH_CONCURRENCY, async (path) => {
-      const entry = shaByPath.get(path)!
-      if ((entry.size ?? 0) > MAX_PAGE_BYTES) return null
-      const blob = await withGitHubRetry(() =>
-        getRepositoryBlob(token, info.repoFullName, entry.sha),
-      )
-      if (blob.encoding !== 'base64') return null
-      return {
-        path,
-        raw: Buffer.from(blob.content.replace(/\s/g, ''), 'base64').toString('utf8'),
-      }
+    await readDocsCheckFiles(pagePaths, async (path) => {
+      if ((snapshot.sizes.get(path) ?? 0) > MAX_PAGE_BYTES) return null
+      const file = await snapshot.read(path)
+      return file ? { path, raw: file.raw } : null
     })
   ).filter((page): page is { path: string; raw: string } => page !== null)
 
-  const broken = findBrokenDocsLinks({ pages, files: new Set(shaByPath.keys()), root })
-  const report = docsLinkCheckReport(broken, {
-    mode: checks.brokenLinks,
+  const broken = findBrokenDocsLinks({
+    pages,
+    files: new Set(snapshot.sizes.keys()),
+    root: snapshot.root,
+  })
+  return docsLinkCheckReport(broken, {
+    mode,
     pageCount: pages.length,
-    truncated: tree.truncated === true || allPagePaths.length > pagePaths.length,
+    truncated: snapshot.truncated || allPagePaths.length > pagePaths.length,
   })
-  const run = await createGitHubCheckRun(token, info.repoFullName, {
-    name: DOCS_LINK_CHECK_NAME,
-    head_sha: info.headSha,
-    external_id: `breezify-docs-links:${info.repoId}:${info.headSha}`,
-    status: 'completed',
-    conclusion: report.conclusion,
-    completed_at: new Date().toISOString(),
-    output: report.output,
-  })
-  return {
-    status: 'reported',
-    checkRunId: run.id,
-    brokenLinks: broken.length,
-    conclusion: report.conclusion,
-  }
 }

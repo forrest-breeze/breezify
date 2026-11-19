@@ -41,6 +41,7 @@ import {
   relativeReadmePath,
   README_MAX_PAGE_BYTES,
   README_MAX_PAGES,
+  README_MAX_SPEC_BYTES,
   README_ORDER_FILE,
   slugifySegment,
   type ReadmeDocumentLink,
@@ -64,7 +65,7 @@ import type { ReadmeStore, ReadmeStoreDocument, ReadmeStoreFolder } from './read
 
 const FETCH_CONCURRENCY = 6
 const WRITE_CONCURRENCY = 6
-const MAX_SPEC_BYTES = 2 * 1024 * 1024
+const MAX_SPEC_BYTES = README_MAX_SPEC_BYTES
 const MAX_SKIPPED_RECORDED = 400
 
 export type ReadmeSyncMode = 'merge' | 'replace_breezify'
@@ -153,7 +154,12 @@ async function mapWithConcurrency<T, R>(
   return output
 }
 
-function decodeTextBlob(blob: GitHubBlob): string | null {
+/**
+ * A blob as text, line endings normalized; null when it is not text (binary,
+ * or not UTF-8). The docs checks use the same rule, so a file they accept is a
+ * file the sync reads.
+ */
+export function decodeTextBlob(blob: GitHubBlob): string | null {
   if (blob.encoding !== 'base64') return null
   const decoded = Buffer.from(blob.content.replace(/\s/g, ''), 'base64').toString('utf8')
   if (decoded.includes('\u0000')) return null

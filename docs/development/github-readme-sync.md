@@ -118,6 +118,32 @@ off by default. See `src/lib/github/docs-automation-settings.ts`.
   checks links between pages (slugs, `/docs/<slug>`, `doc:<slug>`) and to files
   in the repository. External URLs are not fetched. Warning concludes
   `neutral`; blocking concludes `failure`. See `src/lib/github/docs-link-check.ts`.
+- **Formatting** (disabled, warning, blocking): a "Docs format" check run on the
+  same commits. It reports what otherwise goes wrong quietly:
+  - a page, `_order.yaml` or OpenAPI file the sync skips (frontmatter that is
+    not a valid YAML mapping or is never closed, a file over its size limit or
+    not UTF-8, an order file that is not a list, a definition that is not valid
+    JSON or YAML);
+  - `title`, `hidden`, `slug` or a changelog `date` whose value is ignored
+    (`hidden: yes` leaves a page published);
+  - a code block that is never closed, a ReadMe component (`<Callout>`,
+    `<Tabs>`, `<Tab>`, `<Accordion>`, `<Cards>`, `<Card>`, `<Columns>`,
+    `<Column>`, `<Table>`, `<Anchor>`, `<HTMLBlock>`) with no matching closing
+    or opening tag, and merge conflict markers;
+  - an `_order.yaml` entry with no page or folder of that name beside it.
+
+  Writing style, heading levels and general Markdown lint are not checked. The
+  whole repository is checked on every commit, not only the changed files, so
+  turn it on as a warning first if the repository has old problems. See
+  `src/lib/github/docs-format-check.ts`.
+
+Both checks are run by `handleReadmeDocsChecks`
+(`src/lib/github/docs-checks.server.ts`), which reads the commit once for the
+two of them. Each posts its own check run, so branch protection can require one
+and not the other; "Re-run" on a check runs only that check. A check that
+cannot read the commit still reports ("could not finish"), so a required check
+is never left waiting. The older "Validate Breezify docs" check only applies to
+Breezify-format links and never runs on a ReadMe-format repository.
 
 ## OpenAPI
 
@@ -141,9 +167,13 @@ Definitions in `reference/` (JSON or YAML) go through the same source sync as
    yet (the migration that introduced that table is dated before the baseline,
    so `supabase db push` only applies it with `--include-all`).
 2. GitHub App: repository permissions **Contents** read and write,
-   **Pull requests** read and write, **Metadata** read. Subscribe to **Push**
-   and **Pull request** events, webhook URL `<app>/api/github/webhook`. Set the
-   `GITHUB_APP_*` variables and `GITHUB_WEBHOOK_SECRET`.
+   **Pull requests** read and write, **Metadata** read, and **Checks** read and
+   write for the pull request checks. Subscribe to **Push** and **Pull request**
+   events, webhook URL `<app>/api/github/webhook`. GitHub sends check requests
+   to an App that can write checks without a separate subscription. An
+   installation made before **Checks** was added has to accept the new
+   permission before any check appears. Set the `GITHUB_APP_*` variables and
+   `GITHUB_WEBHOOK_SECRET`.
 3. If ReadMe was syncing the repository, remove ReadMe's GitHub App from it
    first so two integrations are not both writing.
 4. Settings → Integrations → GitHub: connect, choose the repository, the branch

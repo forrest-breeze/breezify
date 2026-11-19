@@ -28,7 +28,10 @@ export interface GithubPublishingSettings {
 }
 
 export interface DocsChecksSettings {
+  /** The "Docs links" check: links to pages or files that do not exist. */
   brokenLinks: DocsCheckMode
+  /** The "Docs format" check: malformed pages, order files and definitions. */
+  formatting: DocsCheckMode
 }
 
 export const DEFAULT_GITHUB_PUBLISHING: GithubPublishingSettings = {
@@ -40,6 +43,7 @@ export const DEFAULT_GITHUB_PUBLISHING: GithubPublishingSettings = {
 
 export const DEFAULT_DOCS_CHECKS: DocsChecksSettings = {
   brokenLinks: 'disabled',
+  formatting: 'disabled',
 }
 
 /** Seconds without an edit before an automatic publish may run. */
@@ -75,6 +79,7 @@ export function getDocsChecksSettings(settings: unknown): DocsChecksSettings {
   const stored = record(record(settings).docs_checks)
   return {
     brokenLinks: oneOf(stored.broken_links, DOCS_CHECK_MODES, DEFAULT_DOCS_CHECKS.brokenLinks),
+    formatting: oneOf(stored.formatting, DOCS_CHECK_MODES, DEFAULT_DOCS_CHECKS.formatting),
   }
 }
 
@@ -90,7 +95,7 @@ export function storedGithubPublishing(value: GithubPublishingSettings): Record<
 
 /** The stored shape of `settings.docs_checks`. */
 export function storedDocsChecks(value: DocsChecksSettings): Record<string, unknown> {
-  return { broken_links: value.brokenLinks }
+  return { broken_links: value.brokenLinks, formatting: value.formatting }
 }
 
 /**

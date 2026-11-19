@@ -1,3 +1,4 @@
+import { extractDocsCheckInfo, type DocsCheckInfo } from './docs-check-request'
 import { frontmatterSlug, parseReadmeFile } from './readme/readme-frontmatter'
 import {
   basenameWithoutExtension,
@@ -221,22 +222,8 @@ export function docsLinkCheckPagePaths(paths: Iterable<string>, root: string): s
 
 export const DOCS_LINK_CHECK_NAME = 'Docs links'
 
-export interface DocsLinkCheckInfo {
-  installationId: number
-  repoId: number
-  repoFullName: string
-  headSha: string
-}
-
-function objectOf(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function positiveInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
-}
+/** The commit a webhook asks the link check to run on. */
+export type DocsLinkCheckInfo = DocsCheckInfo
 
 /**
  * The commit a webhook asks checks for: a new check suite (every push, so
@@ -245,30 +232,7 @@ function positiveInteger(value: unknown): number | null {
 export function extractDocsLinkCheckInfo(
   eventType: string,
   payload: Record<string, unknown>,
-  expectedAppId: string | undefined = process.env.GITHUB_APP_ID,
+  expectedAppId?: string,
 ): DocsLinkCheckInfo | null {
-  const repository = objectOf(payload.repository)
-  const installationId = positiveInteger(objectOf(payload.installation)?.id)
-  const repoId = positiveInteger(repository?.id)
-  const repoFullName = typeof repository?.full_name === 'string' ? repository.full_name : ''
-  if (!installationId || !repoId || !/^[^/\s]+\/[^/\s]+$/.test(repoFullName)) return null
-  const common = { installationId, repoId, repoFullName }
-
-  if (eventType === 'check_suite') {
-    if (payload.action !== 'requested' && payload.action !== 'rerequested') return null
-    const headSha = objectOf(payload.check_suite)?.head_sha
-    return typeof headSha === 'string' && headSha ? { ...common, headSha } : null
-  }
-  if (eventType !== 'check_run' || payload.action !== 'rerequested') return null
-  const appId = expectedAppId ? Number(expectedAppId) : Number.NaN
-  const checkRun = objectOf(payload.check_run)
-  if (
-    !Number.isSafeInteger(appId) ||
-    checkRun?.name !== DOCS_LINK_CHECK_NAME ||
-    positiveInteger(objectOf(checkRun.app)?.id) !== appId
-  ) {
-    return null
-  }
-  const headSha = checkRun.head_sha
-  return typeof headSha === 'string' && headSha ? { ...common, headSha } : null
+  return extractDocsCheckInfo(eventType, payload, DOCS_LINK_CHECK_NAME, expectedAppId)
 }
