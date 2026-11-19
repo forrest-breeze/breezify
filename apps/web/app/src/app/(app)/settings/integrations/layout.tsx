@@ -4,11 +4,12 @@ import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { RemoteIcon } from "@/components/ui/remote-icon";
+import { SourceLogo } from "@/components/ui/source-logo";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHasHydrated } from "@/hooks/use-has-hydrated";
 import { cn } from "@/lib/utils";
-import { FileJson, GitBranch, type LucideIcon } from "lucide-react";
+import { FileJson } from "lucide-react";
 import { useGithubHostedDocs, useOpenApiSources } from "@/hooks/swr";
 
 // ---------------------------------------------------------------------------
@@ -23,9 +24,15 @@ interface IntegrationDef {
   name: string;
   description: string;
   logo?: string;
-  icon?: LucideIcon;
+  icon?: React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
   invertInDark?: boolean;
   href: string;
+}
+
+// The GitHub mark itself rather than a generic branch glyph. It is monochrome,
+// so it takes the same muted tint as the other rows' icons.
+function GitHubMark({ className }: { className?: string }): React.JSX.Element {
+  return <SourceLogo source="github" className={className} />;
 }
 
 // Connected apps own a real, per-account connection state (fetched via SWR),
@@ -42,7 +49,7 @@ const CONNECTED_APPS: IntegrationDef[] = [
     id: "github",
     name: "GitHub",
     description: "Two-way docs sync with a repository.",
-    icon: GitBranch,
+    icon: GitHubMark,
     href: "/settings/integrations/github",
   },
 ];

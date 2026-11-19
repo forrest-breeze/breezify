@@ -2612,10 +2612,21 @@ export function PortalBuilder({
   const treeRootFolderId = activeSurfaceFollowsHome
     ? scopeContentRootId(currentScope)
     : null
-  const treePromotedRootIds = useMemo(
-    () => scopePromotedIdsOf(treeScope),
-    [treeScope],
-  )
+  // An API reference groups endpoints by the folder they sit in and never
+  // shows the folder above those groups, so that folder is not a row in the
+  // tree either: its groups sit at the top, as they do on the published page.
+  const activePageIsApiReference =
+    activePage != null && portalPagePresentation(activePage) === "api_reference"
+  const treePromotedRootIds = useMemo(() => {
+    const promoted = scopePromotedIdsOf(treeScope)
+    if (activePageIsApiReference) {
+      for (const entry of treeScope ?? []) {
+        if (typeof entry === "string") promoted.add(entry)
+        else if ("id" in entry) promoted.add(entry.id)
+      }
+    }
+    return promoted
+  }, [activePageIsApiReference, treeScope])
 
   function addToActiveSurfaceScope(entry: PortalScopeEntry): void {
     if (activeSurfaceFollowsHome) {
