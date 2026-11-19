@@ -14,6 +14,9 @@ const querySchema = z
   .object({
     workspace: slugSchema.optional(),
     project: slugSchema.optional(),
+    // Which browser color scheme the icon is for; the portal layout links one
+    // icon per scheme when a dark favicon is configured.
+    scheme: z.enum(["light", "dark"]).optional(),
   })
   .strict()
 
@@ -49,7 +52,7 @@ export async function GET(request: NextRequest): Promise<ImageResponse | Respons
   const query = safeSearchParams(request.nextUrl, querySchema)
   if (!query.ok) return query.response
 
-  const { workspace: workspaceSlug, project: projectSlug } = query.data
+  const { workspace: workspaceSlug, project: projectSlug, scheme } = query.data
   const parsed = workspaceSlug
     ? parsePortalPath(projectSlug ? [workspaceSlug, projectSlug] : [workspaceSlug])
     : null
@@ -66,8 +69,10 @@ export async function GET(request: NextRequest): Promise<ImageResponse | Respons
   const theme = layout?.theme
   // A project-specific favicon is the only override. Otherwise portal tabs
   // stay aligned with the workspace brand kit, even when a project has its own
-  // light/dark header logos.
+  // light/dark header logos. The dark favicon is optional and falls through to
+  // the same chain as the light one.
   const faviconUrl = [
+    scheme === "dark" ? theme?.darkFaviconUrl : null,
     theme?.faviconUrl,
     workspace.branding.logoUrl,
     workspace.iconUrl,
@@ -86,9 +91,11 @@ export async function GET(request: NextRequest): Promise<ImageResponse | Respons
   }
   const circle = theme?.faviconShape === "circle"
   const borderRadius = circle ? "50%" : "22%"
-  // Inset the image so its corners sit inside the rounded/circular crop: a
-  // square fits a circle at ~71% of its diameter.
-  const inset = circle ? 0.15 : 0.06
+  // A rounded favicon is drawn edge to edge, so an uploaded mark is the same
+  // size in the tab as the file itself would be. Only the circle insets the
+  // image, to keep its corners inside the crop: a square fits a circle at ~71%
+  // of its diameter.
+  const inset = circle ? 0.15 : 0
   const icon = faviconUrl
     ? createElement(
         "div",

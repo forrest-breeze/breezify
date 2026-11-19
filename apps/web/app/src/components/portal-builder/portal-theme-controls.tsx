@@ -52,7 +52,7 @@ interface PortalThemeControlsProps {
   className?: string
 }
 
-type ImageSlot = "light" | "dark" | "favicon"
+type ImageSlot = "light" | "dark" | "favicon" | "faviconDark"
 
 function DeferredTextField({
   id,
@@ -93,8 +93,9 @@ function DeferredTextField({
   )
 }
 
-function LogoUploadCard({
+function BrandImageUploadCard({
   slot,
+  kind = "logo",
   label,
   imageUrl,
   hasCustomImage,
@@ -107,6 +108,8 @@ function LogoUploadCard({
   onRemove,
 }: {
   slot: "light" | "dark"
+  /** What the image is; a favicon previews as the cropped tab icon. */
+  kind?: "logo" | "favicon"
   label: string
   imageUrl?: string
   hasCustomImage: boolean
@@ -130,7 +133,7 @@ function LogoUploadCard({
       <div
         role="button"
         tabIndex={0}
-        aria-label={`${label} logo. Click to upload.`}
+        aria-label={`${label} ${kind}. Click to upload.`}
         aria-busy={uploading}
         onClick={openPicker}
         onKeyDown={(event) => {
@@ -163,16 +166,35 @@ function LogoUploadCard({
           <Loader2 className="size-6 animate-spin text-muted-foreground" />
         ) : imageUrl ? (
           <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imageUrl}
-              alt=""
-              className={cn(
-                "max-h-20 max-w-[78%] object-contain",
-                // Inset inside the circle so the logo's corners aren't clipped.
-                circular && "aspect-square rounded-full bg-muted p-[15%]",
-              )}
-            />
+            {kind === "favicon" ? (
+              <span
+                className={cn(
+                  "block size-16 overflow-hidden",
+                  isDark ? "bg-white/10" : "bg-muted",
+                  circular ? "rounded-full" : "rounded-xl",
+                )}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={imageUrl}
+                  alt=""
+                  // Mirrors the served icon: edge to edge, inset only when
+                  // circular so the corners stay inside the crop.
+                  className={cn("size-full object-contain", circular && "p-[15%]")}
+                />
+              </span>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={imageUrl}
+                alt=""
+                className={cn(
+                  "max-h-20 max-w-[78%] object-contain",
+                  // Inset inside the circle so the logo's corners aren't clipped.
+                  circular && "aspect-square rounded-full bg-muted p-[15%]",
+                )}
+              />
+            )}
             {hasCustomImage ? (
               <button
                 type="button"
@@ -210,7 +232,7 @@ function LogoUploadCard({
         ref={inputRef}
         type="file"
         accept="image/png,image/jpeg,image/webp,image/svg+xml"
-        aria-label={`${label} logo upload`}
+        aria-label={`${label} ${kind} upload`}
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0]
@@ -442,6 +464,7 @@ export function PortalThemeControls({
   const lightLogoInputRef = useRef<HTMLInputElement>(null)
   const darkLogoInputRef = useRef<HTMLInputElement>(null)
   const faviconInputRef = useRef<HTMLInputElement>(null)
+  const darkFaviconInputRef = useRef<HTMLInputElement>(null)
   const { theme } = layout
   const logoText = theme.logoText ?? theme.brandName
   const faviconPreviewUrl =
@@ -486,6 +509,7 @@ export function PortalThemeControls({
       if (slot === "light") patch({ logoUrl: url })
       if (slot === "dark") patch({ darkLogoUrl: url })
       if (slot === "favicon") patch({ faviconUrl: url })
+      if (slot === "faviconDark") patch({ darkFaviconUrl: url })
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed")
     } finally {
@@ -512,7 +536,7 @@ export function PortalThemeControls({
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <LogoUploadCard
+          <BrandImageUploadCard
             slot="light"
             label="Light mode"
             imageUrl={theme.logoUrl || workspaceLogoUrl}
@@ -527,7 +551,7 @@ export function PortalThemeControls({
             onFile={(file) => void handleImageFile("light", file)}
             onRemove={() => patch({ logoUrl: "" })}
           />
-          <LogoUploadCard
+          <BrandImageUploadCard
             slot="dark"
             label="Dark mode"
             imageUrl={theme.darkLogoUrl}
@@ -611,103 +635,44 @@ export function PortalThemeControls({
           <Label>Favicon</Label>
           <p className="text-xs leading-relaxed text-muted-foreground">
             The image that appears in the browser tab. Leave empty to use the
-            workspace logo. Recommended size: 16×16 pixels.
+            workspace logo. The dark mode favicon shows when a visitor&apos;s
+            browser uses a dark theme; leave it empty to use the light one.
+            Recommended size: 32×32 pixels or larger.
           </p>
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label="Favicon. Click to upload."
-            aria-busy={uploadingSlot === "favicon"}
-            onClick={() => {
-              if (uploadingSlot !== "favicon") faviconInputRef.current?.click()
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault()
-                faviconInputRef.current?.click()
+          <div className="grid grid-cols-2 gap-3">
+            <BrandImageUploadCard
+              slot="light"
+              kind="favicon"
+              label="Light mode"
+              imageUrl={faviconPreviewUrl}
+              hasCustomImage={Boolean(theme.faviconUrl)}
+              circular={theme.faviconShape === "circle"}
+              uploading={uploadingSlot === "favicon"}
+              dragActive={dragActiveSlot === "favicon"}
+              inputRef={faviconInputRef}
+              onDragActiveChange={(active) =>
+                setDragActiveSlot(active ? "favicon" : null)
               }
-            }}
-            onDragOver={(event) => {
-              event.preventDefault()
-              setDragActiveSlot("favicon")
-            }}
-            onDragLeave={() => setDragActiveSlot(null)}
-            onDrop={(event) => {
-              event.preventDefault()
-              setDragActiveSlot(null)
-              const file = event.dataTransfer.files?.[0]
-              if (file) void handleImageFile("favicon", file)
-            }}
-            className={cn(
-              "group relative flex min-h-36 cursor-pointer items-center justify-center rounded-xl border border-dashed border-input p-5 text-center transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-              dragActiveSlot === "favicon" &&
-                "border-primary bg-muted/40 ring-2 ring-primary/20",
-            )}
-          >
-            {uploadingSlot === "favicon" ? (
-              <Loader2 className="size-7 animate-spin text-muted-foreground" />
-            ) : faviconPreviewUrl ? (
-              <>
-                <span
-                  className={cn(
-                    "block size-16 overflow-hidden bg-muted",
-                    theme.faviconShape === "circle"
-                      ? "rounded-full"
-                      : "rounded-xl",
-                  )}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={faviconPreviewUrl}
-                    alt=""
-                    className={cn(
-                      "size-full object-contain",
-                      theme.faviconShape === "circle" ? "p-[15%]" : "p-[6%]",
-                    )}
-                  />
-                </span>
-                {theme.faviconUrl ? (
-                  <button
-                    type="button"
-                    className="absolute left-1/2 top-1/2 flex h-9 -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-xl border border-border bg-background/95 px-3 text-xs font-medium opacity-0 shadow-sm transition-opacity pointer-events-none hover:bg-background focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      patch({ faviconUrl: "" })
-                    }}
-                  >
-                    <Trash2 className="size-3.5 text-destructive" />
-                    Remove
-                  </button>
-                ) : null}
-              </>
-            ) : (
-              <div className="space-y-2">
-                <ImageIcon className="mx-auto size-8 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">
-                  Drop an image or{" "}
-                  <span className="font-medium text-violet-500">
-                    click to browse
-                  </span>
-                </p>
-                <p className="text-xs text-muted-foreground/80">
-                  Supports PNG, JPG, SVG
-                </p>
-              </div>
-            )}
+              onFile={(file) => void handleImageFile("favicon", file)}
+              onRemove={() => patch({ faviconUrl: "" })}
+            />
+            <BrandImageUploadCard
+              slot="dark"
+              kind="favicon"
+              label="Dark mode"
+              imageUrl={theme.darkFaviconUrl || faviconPreviewUrl}
+              hasCustomImage={Boolean(theme.darkFaviconUrl)}
+              circular={theme.faviconShape === "circle"}
+              uploading={uploadingSlot === "faviconDark"}
+              dragActive={dragActiveSlot === "faviconDark"}
+              inputRef={darkFaviconInputRef}
+              onDragActiveChange={(active) =>
+                setDragActiveSlot(active ? "faviconDark" : null)
+              }
+              onFile={(file) => void handleImageFile("faviconDark", file)}
+              onRemove={() => patch({ darkFaviconUrl: "" })}
+            />
           </div>
-          <input
-            ref={faviconInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/svg+xml"
-            aria-label="Favicon upload"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (file) void handleImageFile("favicon", file)
-              event.target.value = ""
-            }}
-          />
           <div className="flex items-center gap-3 pt-1">
             <Switch
               id="portal-circular-favicon"

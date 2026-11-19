@@ -561,6 +561,9 @@ const portalThemeSchema = z.object({
   logoUrl: z.string().max(2048), // "" when unset
   darkLogoUrl: z.string().max(2048).optional(),
   faviconUrl: z.string().max(2048).optional(),
+  // Shown when the visitor's browser uses a dark color scheme; falls back to
+  // `faviconUrl` when unset.
+  darkFaviconUrl: z.string().max(2048).optional(),
   faviconShape: z.enum(["rounded", "circle"]).optional(),
   logoText: z.string().max(80).optional(),
   logoLink: z.union([z.literal(""), hrefSchema]).optional(),

@@ -308,6 +308,7 @@ describe("validatePortalLayout", () => {
         logoUrl: "https://cdn.example.com/logo-light.svg",
         darkLogoUrl: "https://cdn.example.com/logo-dark.svg",
         faviconUrl: "https://cdn.example.com/favicon.svg",
+        darkFaviconUrl: "https://cdn.example.com/favicon-dark.svg",
         faviconShape: "circle",
         logoText: "Acme Help",
         logoLink: "https://www.example.com",
@@ -318,6 +319,7 @@ describe("validatePortalLayout", () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.data.theme.darkLogoUrl).toContain("logo-dark.svg")
+    expect(result.data.theme.darkFaviconUrl).toContain("favicon-dark.svg")
     expect(result.data.theme.faviconShape).toBe("circle")
     expect(result.data.theme.circularLogo).toBe(true)
   })

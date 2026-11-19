@@ -32,7 +32,7 @@ export async function generateMetadata({
   if (!parsed) return NOT_FOUND_META
   // Same cached resolution as the layout body below — gating (login redirect /
   // not-found) is shared, so a private portal never leaks branding here.
-  const { workspace, base } = await requirePortal(
+  const { workspace, layout, base } = await requirePortal(
     parsed.workspaceSlug,
     parsed.projectSlug,
     await portalPublicNextPath(
@@ -54,13 +54,28 @@ export async function generateMetadata({
     /\/+$/,
     "",
   )
+  const iconUrl = `${appUrl}/api/public/portal-icon?${iconQuery.toString()}`
   return {
     title: { default: branding.name, template: `%s · ${branding.name}` },
     description: branding.tagline || `${branding.name} knowledge base`,
     icons: {
-      icon: {
-        url: `${appUrl}/api/public/portal-icon?${iconQuery.toString()}`,
-      },
+      // With a dark favicon configured, link one icon per color scheme and let
+      // the browser pick. This follows the visitor's browser/OS theme (what the
+      // tab strip is drawn in), not the portal's own appearance setting. Light
+      // is declared last: a browser that ignores `media` on icons takes the
+      // last one, and a dark-mode mark is usually invisible on a light tab.
+      icon: layout?.theme.darkFaviconUrl
+        ? [
+            {
+              url: `${iconUrl}&scheme=dark`,
+              media: "(prefers-color-scheme: dark)",
+            },
+            {
+              url: `${iconUrl}&scheme=light`,
+              media: "(prefers-color-scheme: light)",
+            },
+          ]
+        : { url: iconUrl },
     },
     robots: isPublic ? undefined : { index: false, follow: false },
     ...(llmsUrl
