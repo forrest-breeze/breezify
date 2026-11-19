@@ -24,6 +24,7 @@ import {
   type ReadmeExportSpec,
 } from './readme-export'
 import {
+  isApiReferencePage,
   readmeFolderMetadata,
   readmeSectionOf,
   readReadmeDocumentLink,
@@ -133,6 +134,9 @@ export async function loadReadmeExportInput(
   const exported = folders.filter(
     (folder) => !folder.restricted || readReadmeFolderLink(folder.metadata, repoId) !== null,
   )
+  // API reference pages are generated from a definition; the definition is
+  // what goes to GitHub, the same way the sync leaves reference stubs alone.
+  const mirrored = documents.filter((document) => !isApiReferencePage(document.metadata))
   return {
     storeDocuments: documents,
     folders: exported.map((folder) => ({
@@ -143,7 +147,7 @@ export async function loadReadmeExportInput(
       markdown: toMarkdown(folder.content),
       link: readReadmeFolderLink(folder.metadata, repoId),
     })),
-    documents: documents.map((document) => {
+    documents: mirrored.map((document) => {
       const metadata = document.metadata
       const sameRepository = Number(metadata?.repo_id) === repoId
       const pending = metadata?.github_hosted_pending_path
@@ -518,6 +522,8 @@ async function recordPublishedPlan(
   const { plan, storeDocuments, state, branch } = comparison
   const documentById = new Map(storeDocuments.map((document) => [document.id, document]))
 
+  // A page may be written to a path a trashed document used to have.
+  await store.releaseDeletedPaths(plan.documents.map((result) => result.path))
   for (const result of plan.documents) {
     const document = documentById.get(result.id)
     if (!document) continue

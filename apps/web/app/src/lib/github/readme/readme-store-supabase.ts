@@ -229,6 +229,44 @@ export function createSupabaseReadmeStore(
       }
     },
 
+    async releaseDeletedPaths(paths: string[]): Promise<void> {
+      if (paths.length === 0) return
+      const wanted = new Set(paths)
+      for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data, error } = await admin
+          .from('documents')
+          .select('id, source_metadata')
+          .eq('workspace_id', workspaceId)
+          .not('deleted_at', 'is', null)
+          .contains('source_metadata', { kind: 'github_hosted_document', repo_id: repoId })
+          .order('id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1)
+        if (error) throw new Error(`readme deleted path lookup: ${error.message}`)
+        const rows = (data ?? []) as Array<{
+          id: string
+          source_metadata: Record<string, unknown> | null
+        }>
+        for (const row of rows) {
+          const path = row.source_metadata?.path
+          if (typeof path !== 'string' || !wanted.has(path)) continue
+          const { error: updateError } = await admin
+            .from('documents')
+            .update({
+              source_metadata: {
+                ...row.source_metadata,
+                kind: 'github_hosted_detached_document',
+                github_hosted_sync: false,
+                github_hosted_detached_reason: 'path_reused',
+              },
+            })
+            .eq('id', row.id)
+            .eq('workspace_id', workspaceId)
+          if (updateError) throw new Error(`readme deleted path release: ${updateError.message}`)
+        }
+        if (rows.length < PAGE_SIZE) break
+      }
+    },
+
     async createFolder(input): Promise<string> {
       const values = {
         display_name: input.displayName,

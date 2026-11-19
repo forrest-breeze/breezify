@@ -299,6 +299,41 @@ export function readReadmeSyncState(value: unknown, root: string): ReadmeSyncSta
   }
 }
 
+/**
+ * A page that documents one operation of an OpenAPI definition (it carries the
+ * operation in `source_metadata.api_reference`). It is the workspace side of
+ * the generated stubs under `reference/`, which the sync leaves alone in the
+ * repository, so it is never mirrored either: the definition itself is what
+ * lives in the repository.
+ */
+export function isApiReferencePage(
+  metadata: Record<string, unknown> | null | undefined,
+): boolean {
+  const reference = metadata?.api_reference
+  return (
+    typeof reference === 'object' &&
+    reference !== null &&
+    (reference as { format?: unknown }).format === 'openapi'
+  )
+}
+
+/**
+ * True when a document has ever been tied to a repository file: linked,
+ * awaiting its first publish, or detached after its file was removed. Such a
+ * document already has a history with GitHub and is never matched by slug.
+ */
+export function hasRepositoryHistory(
+  metadata: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!metadata) return false
+  return (
+    metadata.github_hosted_sync === true ||
+    (metadata.repo_id !== undefined && metadata.repo_id !== null) ||
+    typeof metadata.canonical_repo_path === 'string' ||
+    typeof metadata.github_hosted_pending_path === 'string'
+  )
+}
+
 /** The link between a Breezify document and its repository file. */
 export interface ReadmeDocumentLink {
   /** Repository path of the file. */

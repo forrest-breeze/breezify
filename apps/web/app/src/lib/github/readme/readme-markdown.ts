@@ -12,6 +12,9 @@
  * is written back as the plain Markdown shown in the editor.
  */
 
+import { convertLayoutBlocks } from './readme-layout-blocks'
+import { markdownWithoutHtml } from './readme-plain-markdown'
+
 const CALLOUT_ICONS: Record<string, string> = {
   info: '📘',
   okay: '👍',
@@ -21,6 +24,7 @@ const CALLOUT_ICONS: Record<string, string> = {
   error: '❗️',
   danger: '❗️',
 }
+
 
 function attribute(attributes: string, name: string): string | null {
   const pattern = new RegExp(
@@ -148,7 +152,7 @@ function magicBlockToMarkdown(type: string, json: string): string {
 }
 
 function transformProse(value: string): string {
-  let output = value
+  let output = convertLayoutBlocks(value)
 
   output = output.replace(
     /\[block:([a-z-]+)\]\s*([\s\S]*?)\s*\[\/block\]/g,
@@ -199,6 +203,20 @@ function transformProse(value: string): string {
     /<HTMLBlock>\s*\{\s*`([\s\S]*?)`\s*\}\s*<\/HTMLBlock>/g,
     (_match, html: string) => `\n\n${dedent(html)}\n\n`,
   )
+  // A tab group becomes Breezify's own tab block (rendered as tabs and editable
+  // as tabs), not a run of bold titles.
+  output = output.replace(/<Tabs\b[^>]*>([\s\S]*?)<\/Tabs>/g, (match, inner: string) => {
+    const tabs = [...inner.matchAll(/<Tab\b([^>]*)>([\s\S]*?)<\/Tab>/g)]
+    if (tabs.length === 0) return match
+    const items = tabs.map(([, attributes, body], index) => {
+      const title =
+        attribute(attributes ?? '', 'title') ??
+        attribute(attributes ?? '', 'label') ??
+        `Tab ${index + 1}`
+      return `{% tab title=${JSON.stringify(title)} %}\n${dedent(body ?? '')}\n{% endtab %}`
+    })
+    return `\n\n{% tabs %}\n${items.join('\n')}\n{% endtabs %}\n\n`
+  })
   // The content of a tab or accordion is indented in the source; left as-is,
   // Markdown would read that indentation as a code block.
   for (let pass = 0; pass < 3; pass++) {
@@ -282,7 +300,7 @@ export function readmeBodyToMarkdown(body: string): string {
     else segments.push({ code: false, lines: [line] })
   }
 
-  return segments
+  const converted = segments
     .map((segment) => {
       if (segment.code) return segment.lines.join('\n')
       return transformProse(segment.lines.join('\n'))
@@ -292,6 +310,9 @@ export function readmeBodyToMarkdown(body: string): string {
         .join('\n')
     })
     .join('\n')
+
+  // Last, so it also covers HTML that the steps above produced or unwrapped.
+  return markdownWithoutHtml(converted)
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()

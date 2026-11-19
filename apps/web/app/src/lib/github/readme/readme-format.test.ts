@@ -162,7 +162,7 @@ describe('ReadMe Markdown -> Breezify Markdown', () => {
     expect(readmeBodyToMarkdown('<Embed url="https://youtu.be/x" title="Demo" />')).toBe('[Demo](https://youtu.be/x)')
   })
 
-  it('unwraps tabs without turning their content into a code block', () => {
+  it('turns a tab group into a Breezify tab block without making its content a code block', () => {
     const source = [
       '<Tabs>',
       '  <Tab title="Visa">',
@@ -176,17 +176,30 @@ describe('ReadMe Markdown -> Breezify Markdown', () => {
       '</Tabs>',
     ].join('\n')
     expect(readmeBodyToMarkdown(source)).toBe(
-      '**Visa**\n\n| Card | Result |\n| --- | --- |\n| `4242` | Success |\n\n**Mastercard**\n\nUse `5555`.',
+      [
+        '{% tabs %}',
+        '{% tab title="Visa" %}',
+        '| Card | Result |',
+        '| --- | --- |',
+        '| `4242` | Success |',
+        '{% endtab %}',
+        '{% tab title="Mastercard" %}',
+        'Use `5555`.',
+        '{% endtab %}',
+        '{% endtabs %}',
+      ].join('\n'),
     )
   })
 
-  it('keeps the HTML table inside <Table>', () => {
+  // Raw HTML cannot stay: one tag makes the app read the whole page as HTML
+  // and flatten its Markdown, so a <Table> becomes a pipe table.
+  it('turns the HTML table inside <Table> into a pipe table', () => {
     expect(readmeBodyToMarkdown('<Table align={["left","left"]}>\n  <thead>\n    <tr><th>Name</th></tr>\n  </thead>\n</Table>')).toBe(
-      '<table>\n  <thead>\n    <tr><th>Name</th></tr>\n  </thead>\n</table>',
+      '| Name |\n| --- |',
     )
   })
 
-  it('leaves placeholders, plain HTML and code alone', () => {
+  it('leaves placeholders and code alone, and keeps the text of plain HTML', () => {
     const source = [
       'Send `Authorization: Basic <YOUR_API_KEY>` or <YOUR_API_KEY> as the user.',
       '',
@@ -197,7 +210,9 @@ describe('ReadMe Markdown -> Breezify Markdown', () => {
       'import x from "y"',
       '```',
     ].join('\n')
-    expect(readmeBodyToMarkdown(source)).toBe(source)
+    expect(readmeBodyToMarkdown(source)).toBe(
+      source.replace('<div class="note">kept<br />here</div>', 'kept\nhere'),
+    )
   })
 
   it('drops MDX imports and converts legacy magic blocks', () => {

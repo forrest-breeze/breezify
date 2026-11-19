@@ -26,6 +26,8 @@ import {
   directoryDisplayName,
   directoryOf,
   folderDirectoryOf,
+  hasRepositoryHistory,
+  isApiReferencePage,
   isIndexPage,
   joinReadmePath,
   parentFolderDirectory,
@@ -94,6 +96,8 @@ export interface ReadmeSyncResult {
   /** Documents kept on Breezify's version because both sides changed. */
   preserved: number
   moved: number
+  /** Pages already in the workspace that were matched to a repository file. */
+  adopted: number
   skipped: ReadmeSkippedFile[]
 }
 
@@ -277,6 +281,7 @@ export async function syncReadmeRepository(
       removed: 0,
       preserved: 0,
       moved: 0,
+      adopted: 0,
       skipped: state.skipped,
     }
   }
@@ -677,12 +682,48 @@ export async function syncReadmeRepository(
     }
   }
 
-  let preserved = 0
-  const uniqueSlug = (page: ParsedPage): string => {
-    const base = slugifySegment(
+  // A page that is new to the sync may already be in the workspace: written
+  // there first, or imported from the same docs before the repository was
+  // linked. A ReadMe page is identified by its URL slug: the `slug` in its
+  // frontmatter, or else its file name, which is the slug ReadMe first gave it.
+  // A workspace page that holds exactly that slug is the same page, so it is
+  // adopted rather than joined by a copy under a second-choice slug.
+  // Only pages that never had anything to do with a repository qualify, and
+  // only ones everyone in the workspace may read: a restricted page must not
+  // be moved into a mirrored folder.
+  const pageSlug = (page: ParsedPage): string =>
+    slugifySegment(
       frontmatterSlug(page.frontmatter) ?? basenameWithoutExtension(page.relative),
       'page',
     )
+  const adoptableBySlug = new Map<string, ReadmeStoreDocument[]>()
+  for (const document of documents) {
+    if (!document.publicSlug || linkByDocument.has(document.id)) continue
+    if (hasRepositoryHistory(document.metadata) || isApiReferencePage(document.metadata)) continue
+    if (document.folderId && folderById.get(document.folderId)?.restricted !== false) continue
+    const candidates = adoptableBySlug.get(document.publicSlug) ?? []
+    candidates.push(document)
+    adoptableBySlug.set(document.publicSlug, candidates)
+  }
+  const adopted = new Map<string, ReadmeStoreDocument>()
+  for (const page of [...unmatched].sort((a, b) => a.file.path.localeCompare(b.file.path))) {
+    if (renamed.has(page.file.path)) continue
+    const slugs = new Set([
+      pageSlug(page),
+      slugifySegment(basenameWithoutExtension(page.relative), 'page'),
+    ])
+    for (const slug of slugs) {
+      const candidates = adoptableBySlug.get(slug) ?? []
+      if (candidates.length !== 1) continue
+      adopted.set(page.file.path, candidates[0]!)
+      adoptableBySlug.delete(slug)
+      break
+    }
+  }
+
+  let preserved = 0
+  const uniqueSlug = (page: ParsedPage): string => {
+    const base = pageSlug(page)
     const section = readmeSectionOf(page.relative) ?? 'docs'
     const candidates = [
       base,
@@ -708,7 +749,9 @@ export async function syncReadmeRepository(
     })
     const wasRenamed = renamed.has(path)
     const pending = pendingByPath.get(path)
-    const existing = documentByPath.get(path) ?? renamed.get(path) ?? pending ?? null
+    const adoptedDocument = adopted.get(path) ?? null
+    const existing =
+      documentByPath.get(path) ?? renamed.get(path) ?? pending ?? adoptedDocument ?? null
     const folderId = folderIdForPage(page.relative)
     const sortOrder = orderIndex(full(page.directory), basenameWithoutExtension(page.relative))
     const status = page.hidden ? 'Draft' : 'Published'
@@ -743,6 +786,30 @@ export async function syncReadmeRepository(
         metadata: {
           ...(existing.metadata ?? {}),
           ...(wasRenamed ? { canonical_repo_path: path, path } : {}),
+          github_hosted_conflict: true,
+          github_hosted_pending_content_hash: sha256(page.markdown),
+          github_hosted_pending_commit_sha: commit.sha,
+        },
+      })
+      preserved++
+      return
+    }
+
+    if (adoptedDocument && target.mode !== 'replace_breezify' && !converged) {
+      // The two sides never shared a version, so neither is known to be the
+      // newer one. The page is linked and takes its place in the repository's
+      // tree, but Breezify's text stays until someone chooses.
+      const relocation: Parameters<ReadmeStore['updateDocument']>[1] = {}
+      if (existing.folderId !== folderId) {
+        relocation.folderId = folderId
+        moved++
+      }
+      if (existing.sortOrder !== sortOrder) relocation.sortOrder = sortOrder
+      await store.updateDocument(existing.id, {
+        ...relocation,
+        metadata: {
+          ...(existing.metadata ?? {}),
+          ...metadata,
           github_hosted_conflict: true,
           github_hosted_pending_content_hash: sha256(page.markdown),
           github_hosted_pending_commit_sha: commit.sha,
@@ -799,6 +866,9 @@ export async function syncReadmeRepository(
     updated++
     await store.refreshIndex(existing.id, page.markdown)
   }
+  // Every page read here is live in the repository, so a trashed document that
+  // still claims one of these paths is out of date and must let go of it.
+  await store.releaseDeletedPaths(pages.map((page) => page.file.path))
   for (let start = 0; start < pages.length; start += WRITE_CONCURRENCY * 4) {
     await mapWithConcurrency(pages.slice(start, start + WRITE_CONCURRENCY * 4), WRITE_CONCURRENCY, syncPage)
     // Heartbeat: lets status polls tell a slow sync from an interrupted one.
@@ -1012,6 +1082,7 @@ export async function syncReadmeRepository(
     removed,
     preserved: Math.max(conflictCount, preserved),
     moved,
+    adopted: adopted.size,
     skipped: visibleSkipped,
   }
 }

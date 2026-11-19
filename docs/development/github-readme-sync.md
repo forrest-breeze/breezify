@@ -57,6 +57,16 @@ and when Settings is opened with a newer commit on the branch.
   takes the repository's version everywhere.
 - A renamed or moved file keeps its document (matched by identical content,
   then by file name).
+- A file with no document yet **adopts** a workspace page that already holds
+  its URL slug (the frontmatter `slug`, or else the file name) instead of
+  importing a copy under a second-choice slug. This is what makes linking a
+  repository into a workspace that already has the same docs work. The page
+  keeps its id, URL and history and moves into the repository's folder. If its
+  text differs from the file, it is flagged as a conflict and Breezify's text
+  stays until someone publishes it or chooses "Use GitHub". Pages in
+  role-restricted folders, API reference pages, and pages that were ever tied
+  to a repository file are never adopted. Folders the adopted pages leave are
+  kept, empty.
 - A file deleted on GitHub removes its document, unless the document was edited
   in Breezify, in which case it is kept and flagged.
 - A document deleted in Breezify is not imported again by a later push; its file
@@ -77,6 +87,9 @@ frontmatter (unchanged except `title`, `hidden`, and a changelog `date`) plus
 the Markdown from the editor. New folders and pages are written under `docs/`.
 Reordering rewrites `_order.yaml`, keeping entries Breezify does not mirror.
 Folders restricted to some workspace roles are never written to GitHub.
+Neither are API reference pages (`source_metadata.api_reference`), which mirror
+the generated stubs the sync leaves alone, nor folders with no page or landing
+page beneath them, since Git has no empty directories.
 
 Publishing is refused while GitHub has commits Breezify has not pulled yet.
 

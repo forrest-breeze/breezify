@@ -271,6 +271,19 @@ describe('ReadMe-format GitHub sync: repository -> workspace', () => {
     expect(store.source.conflict_count).toBe(1)
   })
 
+  it('imports a page again when its file returns after being deleted on GitHub', async () => {
+    const { repo, store, sync } = harness()
+    await sync()
+    repo.push({ 'custom_pages/terms.md': null })
+    await sync()
+    expect(store.liveDocuments().map((document) => document.title)).not.toContain('Terms')
+
+    // The trashed document must not keep the path to itself.
+    repo.push({ 'custom_pages/terms.md': '---\ntitle: Terms\n---\nThe terms, again.\n' })
+    await sync()
+    expect(store.document('custom_pages/terms.md').content).toBe('The terms, again.')
+  })
+
   it('flags a conflict instead of overwriting when both sides changed a page', async () => {
     const { repo, store, sync, inspect, publish } = harness()
     await sync()
@@ -337,6 +350,146 @@ describe('ReadMe-format GitHub sync: repository -> workspace', () => {
     repo.push({ 'reference/payments.yaml': null })
     await sync()
     expect(store.specs.has('payments')).toBe(false)
+  })
+})
+
+describe('ReadMe-format GitHub sync: linking a workspace that already has pages', () => {
+  it('adopts a page that holds the same URL slug instead of importing a copy', async () => {
+    const { store, sync, inspect } = harness()
+    const old = store.authorFolder('Imported docs')
+    const existing = store.authorDocument({
+      title: 'Webhooks',
+      content: 'Coming soon.\n',
+      folderId: old.id,
+      publicSlug: 'webhooks',
+    })
+    const result = await sync()
+
+    expect(result.adopted).toBe(1)
+    expect(store.liveDocuments().filter((document) => document.title === 'Webhooks')).toHaveLength(1)
+    const adopted = store.document('docs/guides/webhooks.md')
+    expect(adopted.id).toBe(existing.id)
+    // It keeps its URL and takes its place in the repository's tree.
+    expect(adopted.publicSlug).toBe('webhooks')
+    expect(adopted.folderId).toBe(store.folder('docs/guides').id)
+    expect(adopted.metadata?.github_hosted_conflict).toBe(false)
+    // Nothing to send back: the workspace and the repository agree, and the
+    // folder the page left has nothing in it to write.
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0, conflictCount: 0 })
+  })
+
+  it('keeps the workspace text of an adopted page that differs, until someone chooses', async () => {
+    const { repo, store, sync, inspect } = harness()
+    const before = repo.files()
+    store.authorDocument({ title: 'API keys', content: 'Written in Breezify.', publicSlug: 'api-keys' })
+    const result = await sync()
+
+    expect(result).toMatchObject({ adopted: 1, preserved: 1 })
+    const adopted = store.document('docs/getting-started/authentication/api-keys.md')
+    expect(adopted.content).toBe('Written in Breezify.')
+    expect(adopted.metadata?.github_hosted_conflict).toBe(true)
+    expect(adopted.folderId).toBe(store.folder('docs/getting-started/authentication').id)
+    expect(store.source.conflict_count).toBe(1)
+    // The difference is a conflict to resolve, not a change to publish.
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', conflictCount: 1 })
+    expect(repo.files()).toEqual(before)
+
+    // A later sync does not undo the choice that is still open.
+    repo.push({ 'README.md': '# changed\n' })
+    await sync()
+    expect(store.document('API keys').content).toBe('Written in Breezify.')
+
+    // "Use GitHub" takes the repository's version and keeps the old one in history.
+    await sync({ mode: 'replace_breezify' })
+    expect(store.document('API keys').content).toBe('Rotate keys often.')
+    expect(store.document('API keys').metadata?.github_hosted_conflict).toBe(false)
+    expect(store.snapshots).toContainEqual(
+      expect.objectContaining({ id: adopted.id, content: 'Written in Breezify.' }),
+    )
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0, conflictCount: 0 })
+  })
+
+  it('matches a page by its file name when the frontmatter sets another slug', async () => {
+    const { store, sync } = harness({
+      ...readmeRepositoryFiles(),
+      'docs/guides/payouts.md': '---\ntitle: Payouts\nslug: guides-payouts\n---\nHow payouts work.\n',
+    })
+    const existing = store.authorDocument({
+      title: 'Payouts',
+      content: 'How payouts work.\n',
+      publicSlug: 'payouts',
+    })
+    const result = await sync()
+    expect(result.adopted).toBe(1)
+    expect(store.document('docs/guides/payouts.md').id).toBe(existing.id)
+    expect(store.liveDocuments().filter((document) => document.title === 'Payouts')).toHaveLength(1)
+  })
+
+  it('adopts a page for a file added on GitHub after the first sync', async () => {
+    const { repo, store, sync } = harness()
+    await sync()
+    const draft = store.authorDocument({ title: 'Refunds', content: 'Draft.', publicSlug: 'refunds' })
+    repo.push({ 'docs/guides/refunds.md': '---\ntitle: Refunds\n---\nFrom GitHub.\n' })
+    const result = await sync()
+    expect(result).toMatchObject({ adopted: 1, created: 0 })
+    expect(store.document('docs/guides/refunds.md').id).toBe(draft.id)
+    expect(draft.content).toBe('Draft.')
+    expect(draft.metadata?.github_hosted_conflict).toBe(true)
+  })
+
+  it('never adopts restricted pages, API reference pages or pages tied to a repository', async () => {
+    const { store, sync } = harness()
+    const internal = store.authorFolder('Internal')
+    internal.restricted = true
+    const restricted = store.authorDocument({
+      title: 'Webhooks',
+      content: 'Private notes.',
+      folderId: internal.id,
+      publicSlug: 'webhooks',
+    })
+    const reference = store.authorDocument({ title: 'API keys', content: 'GET /keys', publicSlug: 'api-keys' })
+    reference.metadata = { api_reference: { format: 'openapi', operation_id: 'listKeys' } }
+    const detached = store.authorDocument({ title: 'Quickstart', content: 'Old.', publicSlug: 'quickstart' })
+    detached.metadata = { repo_id: 7, canonical_repo_path: 'docs/quickstart.md', github_hosted_sync: false }
+
+    const result = await sync()
+    expect(result.adopted).toBe(0)
+    expect(restricted.content).toBe('Private notes.')
+    expect(restricted.folderId).toBe(internal.id)
+    expect(reference.metadata).toEqual({ api_reference: { format: 'openapi', operation_id: 'listKeys' } })
+    expect(detached.content).toBe('Old.')
+    // The repository's pages were imported beside them, under free slugs.
+    expect(store.document('docs/guides/webhooks.md').id).not.toBe(restricted.id)
+    expect(store.document('docs/guides/webhooks.md').publicSlug).not.toBe('webhooks')
+  })
+
+  it('does not publish API reference pages or the empty folders around them', async () => {
+    const { repo, store, sync, inspect, publish } = harness()
+    await sync()
+    const before = repo.files()
+    const reference = store.authorFolder('API Reference')
+    reference.sortOrder = 0
+    const tag = store.authorFolder('Customers', reference.id)
+    tag.sortOrder = 0
+    const operation = store.authorDocument({
+      title: 'Get a customer',
+      content: 'GET /customers/{id}',
+      folderId: tag.id,
+      status: 'Published',
+      publicSlug: 'getcustomerbyid',
+    })
+    operation.metadata = { api_reference: { format: 'openapi', operation_id: 'getCustomerById' } }
+    const emptied = store.authorFolder('Left behind')
+    emptied.sortOrder = 1
+
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0 })
+    await expect(publish()).rejects.toMatchObject({ code: 'no_changes' })
+    expect(repo.files()).toEqual(before)
+    // Not linked to a directory that does not exist, so a later sync cannot
+    // mistake them for folders whose directory was deleted.
+    expect(reference.metadata).toEqual({})
+    expect(tag.metadata).toEqual({})
+    expect(emptied.metadata).toEqual({})
   })
 })
 

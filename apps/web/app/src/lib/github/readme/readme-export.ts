@@ -211,6 +211,20 @@ export function planReadmeExport(input: {
   const documents = input.documents.filter(
     (document) => document.folderId === null || directoryByFolder.has(document.folderId),
   )
+  // Git has no empty directories. A folder with no page and no landing page
+  // anywhere beneath it has nothing to write, so it is neither listed in an
+  // order file nor given a link to a directory that would not exist.
+  const materialized = new Set<string>()
+  const materialize = (folderId: string | null): void => {
+    for (let id = folderId; id && !materialized.has(id); id = folderById.get(id)?.parentId ?? null) {
+      if (!folderById.has(id)) break
+      materialized.add(id)
+    }
+  }
+  for (const document of documents) materialize(document.folderId)
+  for (const folder of input.folders) {
+    if (folder.markdown.trim() || folder.link?.indexPath) materialize(folder.id)
+  }
   const ordered = [...documents].sort((a, b) => {
     const linkedOrder = Number(!a.link) - Number(!b.link)
     return (
@@ -305,7 +319,7 @@ export function planReadmeExport(input: {
   const folderResults: ReadmeExportFolderResult[] = []
   for (const folder of input.folders) {
     const directory = directoryByFolder.get(folder.id)
-    if (!directory) continue
+    if (!directory || !materialized.has(folder.id)) continue
     const link = folder.link
     const hasLanding = Boolean(folder.markdown.trim()) || Boolean(link?.indexPath)
     const nextLink: ReadmeFolderLink = {
@@ -399,7 +413,7 @@ export function planReadmeExport(input: {
   for (const folder of input.folders) {
     const directory = directoryByFolder.get(folder.id)
     // Section roots (reference, recipes, ...) are not listed in any order file.
-    if (!directory || !directory.includes('/')) continue
+    if (!directory || !directory.includes('/') || !materialized.has(folder.id)) continue
     addChild(directoryOf(directory), directory.split('/').at(-1)!, folder.sortOrder)
   }
   for (const document of documents) {

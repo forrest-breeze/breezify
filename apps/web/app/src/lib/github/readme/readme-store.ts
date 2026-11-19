@@ -67,6 +67,13 @@ export interface ReadmeStore {
   listDeletedLinks(): Promise<Array<{ path: string; blobSha: string | null }>>
   /** Forget those links once the files are gone from the repository. */
   clearDeletedLinks(paths: string[]): Promise<void>
+  /**
+   * Make trashed documents give up these repository paths. The database allows
+   * one hosted document per path, trashed ones included, so a path must be
+   * released before another document is written for it. The trashed document
+   * stays in the trash, detached from the repository.
+   */
+  releaseDeletedPaths(paths: string[]): Promise<void>
 
   createFolder(input: {
     name: string

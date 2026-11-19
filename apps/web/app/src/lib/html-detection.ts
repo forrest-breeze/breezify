@@ -106,10 +106,10 @@ const HTML_TAG_NAMES = [
   "wbr",
 ] as const
 
-const HTML_TAG_PATTERN = new RegExp(
-  String.raw`</?(?:${HTML_TAG_NAMES.join("|")})(?=[\s>/])[^>]*>`,
-  "i",
-)
+/** Every HTML tag that makes `looksLikeHtml` treat a document as HTML. */
+export const HTML_TAG_SOURCE = String.raw`</?(?:${HTML_TAG_NAMES.join("|")})(?=[\s>/])[^>]*>`
+
+const HTML_TAG_PATTERN = new RegExp(HTML_TAG_SOURCE, "i")
 
 const FENCE_OPEN = /^[ \t]{0,3}(`{3,}|~{3,})/
 const INLINE_CODE = /(`+)[^`\n]*\1/g

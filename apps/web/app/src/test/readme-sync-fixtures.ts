@@ -358,6 +358,23 @@ export class MemoryReadmeStore implements ReadmeStore {
     }
   }
 
+  async releaseDeletedPaths(paths: string[]): Promise<void> {
+    for (const document of this.documents.values()) {
+      if (
+        document.deleted &&
+        document.metadata?.kind === 'github_hosted_document' &&
+        document.metadata.repo_id === this.repoId &&
+        paths.includes(document.metadata.path as string)
+      ) {
+        document.metadata = {
+          ...document.metadata,
+          kind: 'github_hosted_detached_document',
+          github_hosted_sync: false,
+        }
+      }
+    }
+  }
+
   async createFolder(input: Parameters<ReadmeStore['createFolder']>[0]): Promise<string> {
     const existing = [...this.folders.values()].find((folder) => folder.name === input.name)
     const id = existing?.id ?? this.id('folder')
@@ -382,10 +399,34 @@ export class MemoryReadmeStore implements ReadmeStore {
     this.folders.delete(id)
   }
 
+  /**
+   * Faithful to the `documents_unique_github_hosted_source_path` index: one
+   * `github_hosted_document` per repository path, counting trashed documents.
+   */
+  private assertUniqueRepositoryPath(
+    id: string | null,
+    metadata: Record<string, unknown> | null | undefined,
+  ): void {
+    if (metadata?.kind !== 'github_hosted_document' || typeof metadata.path !== 'string') return
+    const clash = [...this.documents.values()].find(
+      (document) =>
+        document.id !== id &&
+        document.metadata?.kind === 'github_hosted_document' &&
+        document.metadata.repo_id === metadata.repo_id &&
+        document.metadata.path === metadata.path,
+    )
+    if (clash) {
+      throw new Error(
+        `duplicate key value violates unique constraint "documents_unique_github_hosted_source_path" (${metadata.path})`,
+      )
+    }
+  }
+
   async insertDocument(input: Parameters<ReadmeStore['insertDocument']>[0]): Promise<string> {
     if ([...this.documents.values()].some((document) => document.publicSlug === input.publicSlug)) {
       throw new Error(`duplicate public slug ${input.publicSlug}`)
     }
+    this.assertUniqueRepositoryPath(null, input.metadata)
     const id = this.id('doc')
     this.documents.set(id, { id, ...input, updatedAt: null, deleted: false })
     return id
@@ -395,6 +436,7 @@ export class MemoryReadmeStore implements ReadmeStore {
     id: string,
     patch: Parameters<ReadmeStore['updateDocument']>[1],
   ): Promise<void> {
+    if (patch.metadata) this.assertUniqueRepositoryPath(id, patch.metadata)
     Object.assign(this.documents.get(id)!, patch)
   }
 
@@ -405,6 +447,7 @@ export class MemoryReadmeStore implements ReadmeStore {
     if (document.title !== input.expectedTitle || document.content !== input.expectedContent) {
       throw new Error('The Breezify document changed while GitHub content was being applied.')
     }
+    this.assertUniqueRepositoryPath(document.id, { ...document.metadata, ...input.metadataPatch })
     this.snapshots.push({ id: document.id, title: document.title, content: document.content })
     document.title = input.title
     document.content = input.content
