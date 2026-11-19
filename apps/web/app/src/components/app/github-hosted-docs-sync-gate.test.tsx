@@ -17,12 +17,28 @@ vi.mock("@/hooks/use-has-hydrated", () => ({
   useHasHydrated: mocks.useHasHydrated,
 }))
 
-function renderGate(): void {
+type InitialSource = React.ComponentProps<
+  typeof GithubHostedDocsSyncGate
+>["initialSource"]
+
+function renderGate(initialSource?: InitialSource): void {
   render(
-    <GithubHostedDocsSyncGate>
+    <GithubHostedDocsSyncGate initialSource={initialSource}>
       <button type="button">Editable control</button>
     </GithubHostedDocsSyncGate>,
   )
+}
+
+function serverSource(
+  syncStatus: "pending" | "syncing" | "synced",
+  updatedAt: string,
+): NonNullable<InitialSource> {
+  return {
+    sync_status: syncStatus,
+    repo_full_name: "breezify/breezify",
+    paths: ["docs"],
+    updated_at: updatedAt,
+  }
 }
 
 describe("GithubHostedDocsSyncGate", () => {
@@ -133,5 +149,95 @@ describe("GithubHostedDocsSyncGate", () => {
 
     expect(screen.getByRole("button", { name: "Editable control" })).toBeEnabled()
     expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("locks from the server state before hydration, without any client status", () => {
+    mocks.useHasHydrated.mockReturnValue(false)
+    mocks.useGithubHostedDocs.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: true,
+      isValidating: true,
+    })
+
+    renderGate(serverSource("syncing", "2026-11-19T22:01:28Z"))
+
+    expect(screen.getByRole("status")).toBeInTheDocument()
+    expect(screen.getByText("breezify/breezify/docs")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Editable control" })).toBeNull()
+  })
+
+  it("keeps the server lock while the cached client status is older", () => {
+    mocks.useGithubHostedDocs.mockReturnValue({
+      data: {
+        source: { sync_status: "synced", updated_at: "2026-11-18T09:00:00Z" },
+      },
+      error: undefined,
+      isLoading: false,
+      isValidating: true,
+    })
+
+    renderGate(serverSource("syncing", "2026-11-19T22:01:28Z"))
+
+    expect(screen.getByRole("status")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Editable control" })).toBeNull()
+  })
+
+  it("unlocks once a newer client status reports the sync finished", () => {
+    mocks.useGithubHostedDocs.mockReturnValue({
+      data: {
+        source: { sync_status: "synced", updated_at: "2026-11-19T22:01:36Z" },
+      },
+      error: undefined,
+      isLoading: false,
+      isValidating: false,
+    })
+
+    renderGate(serverSource("syncing", "2026-11-19T22:01:28Z"))
+
+    expect(screen.getByRole("button", { name: "Editable control" })).toBeEnabled()
+    expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("does not lock on a stale cached sync when the server state is newer", () => {
+    mocks.useGithubHostedDocs.mockReturnValue({
+      data: {
+        source: { sync_status: "syncing", updated_at: "2026-11-19T21:00:00Z" },
+      },
+      error: undefined,
+      isLoading: false,
+      isValidating: true,
+    })
+
+    renderGate(serverSource("synced", "2026-11-19T22:01:36Z"))
+
+    expect(screen.getByRole("button", { name: "Editable control" })).toBeEnabled()
+    expect(screen.queryByRole("status")).toBeNull()
+  })
+
+  it("unlocks when the client learns the repository was unlinked", () => {
+    mocks.useGithubHostedDocs.mockReturnValue({
+      data: { source: null },
+      error: undefined,
+      isLoading: false,
+      isValidating: false,
+    })
+
+    renderGate(serverSource("syncing", "2026-11-19T22:01:28Z"))
+
+    expect(screen.getByRole("button", { name: "Editable control" })).toBeEnabled()
+  })
+
+  it("fails open on a server lock when the status request fails", () => {
+    mocks.useGithubHostedDocs.mockReturnValue({
+      data: undefined,
+      error: new Error("temporary failure"),
+      isLoading: false,
+      isValidating: false,
+    })
+
+    renderGate(serverSource("syncing", "2026-11-19T22:01:28Z"))
+
+    expect(screen.getByRole("button", { name: "Editable control" })).toBeEnabled()
   })
 })

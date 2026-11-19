@@ -1,4 +1,5 @@
-import useSWR, { type SWRConfiguration } from "swr"
+import { useState } from "react"
+import useSWR, { type SWRConfiguration, type SWRResponse } from "swr"
 import type {
   DocumentLinksResponse,
   FolderDetailResponse,
@@ -67,6 +68,31 @@ async function fetcher<T>(url: string): Promise<T> {
 // stale error from the previous workspace.
 async function scopedFetcher<T>(key: readonly [string, ...unknown[]]): Promise<T> {
   return fetcher<T>(key[0])
+}
+
+/**
+ * `useSWR` that polls at an interval chosen from the latest response, e.g.
+ * every 5s while a background job is running and not at all once it is done.
+ *
+ * SWR accepts a function for `refreshInterval`, but only calls it when polling
+ * starts (on mount) and after each poll. If it returns 0 at mount — the job
+ * was idle, or nothing was cached yet — no timer is ever set, so a response
+ * that turns active on the first fetch is never polled again and the UI waits
+ * on it until a reload. Keeping the interval in state avoids that: a changed
+ * number restarts SWR's polling effect.
+ */
+function useSWRWithDataInterval<Data>(
+  key: string | null,
+  intervalFor: (latest: Data | undefined) => number,
+  config: SWRConfiguration<Data>,
+): SWRResponse<Data> {
+  const [refreshInterval, setRefreshInterval] = useState(0)
+  const swr = useSWR<Data>(key, fetcher, { refreshInterval, ...config })
+  const wanted = intervalFor(swr.data)
+  // Adjusting state during render: React re-renders at once with the new
+  // interval, before effects run, so polling starts with the same commit.
+  if (wanted !== refreshInterval) setRefreshInterval(wanted)
+  return swr
 }
 
 function projectScopedUrl(path: string, projectSlug?: string | null): string {
@@ -699,11 +725,11 @@ interface MonitoredReposResponse {
 export function useMonitoredRepos(
   config?: SWRConfiguration<MonitoredReposResponse>,
 ) {
-  return useSWR<MonitoredReposResponse>("/api/github/repos", fetcher, {
-    dedupingInterval: 2_000,
+  return useSWRWithDataInterval<MonitoredReposResponse>(
+    "/api/github/repos",
     // Repository indexing runs after the add-repo response. Poll only while a
     // run is active, then stop once the persisted outcome is visible.
-    refreshInterval: (latest) =>
+    (latest) =>
       latest?.repos.some(
         (repo) =>
           repo.file_sync_status === "pending" ||
@@ -711,8 +737,8 @@ export function useMonitoredRepos(
       )
         ? 5_000
         : 0,
-    ...config,
-  })
+    { dedupingInterval: 2_000, ...config },
+  )
 }
 
 // Repos the GitHub App installation can access — powers the "add repo"
@@ -760,14 +786,10 @@ export function useGithubHostedDocs(
   config?: SWRConfiguration<GithubHostedDocsResponse> & { enabled?: boolean },
 ) {
   const { enabled = true, ...swrConfig } = config ?? {}
-  return useSWR<GithubHostedDocsResponse>(
+  return useSWRWithDataInterval<GithubHostedDocsResponse>(
     enabled ? "/api/github/hosted-docs?summary=1" : null,
-    fetcher,
-    {
-      dedupingInterval: 2_000,
-      refreshInterval: githubHostedDocsRefreshInterval,
-      ...swrConfig,
-    },
+    githubHostedDocsRefreshInterval,
+    { dedupingInterval: 2_000, ...swrConfig },
   )
 }
 
@@ -837,17 +859,12 @@ export function useGithubHostedDocsPublishStatus(
         source.conflict_count,
       ])
     : ""
-  return useSWR<GithubHostedDocsPublishStatusResponse>(
+  return useSWRWithDataInterval<GithubHostedDocsPublishStatusResponse>(
     canInspect
       ? `${GITHUB_HOSTED_DOCS_PUBLISH_STATUS_PATH}?basis=${encodeURIComponent(basis)}`
       : null,
-    fetcher,
-    {
-      dedupingInterval: 30_000,
-      revalidateOnFocus: true,
-      refreshInterval: githubHostedDocsPublishStatusRefreshInterval,
-      ...swrConfig,
-    },
+    githubHostedDocsPublishStatusRefreshInterval,
+    { dedupingInterval: 30_000, revalidateOnFocus: true, ...swrConfig },
   )
 }
 
