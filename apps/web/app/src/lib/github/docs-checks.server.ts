@@ -65,6 +65,15 @@ function unfinishedReport(name: string, mode: EnabledMode): CheckReport {
 }
 
 /**
+ * A request that posts nothing is otherwise silent, and "why did no check
+ * appear on my pull request?" is the first thing anyone asks. No repository or
+ * workspace is named: the log only says which rule left the request alone.
+ */
+function logIgnored(details: Record<string, unknown>): void {
+  console.info('[Breezify] GitHub ReadMe docs checks not run:', details)
+}
+
+/**
  * Run the requested checks on one commit and post a check run for each one the
  * linked workspace has turned on. A repository with no ReadMe-format link, or
  * with the checks off, is left alone before any token is minted.
@@ -86,7 +95,10 @@ export async function handleReadmeDocsChecks(
     format: string | null
     sync_status: string
   }>).find((row) => row.format === 'readme' && row.sync_status !== 'disabled')
-  if (!source) return { status: 'ignored', reason: 'unlinked' }
+  if (!source) {
+    logIgnored({ reason: 'unlinked', sources: (data ?? []).length })
+    return { status: 'ignored', reason: 'unlinked' }
+  }
 
   const { checks: settings } = await loadDocsAutomationSettings(admin, source.workspace_id)
   const modes: Record<ReadmeDocsCheck, DocsCheckMode> = {
@@ -97,7 +109,10 @@ export async function handleReadmeDocsChecks(
     const mode = modes[check]
     return mode === 'disabled' ? [] : [{ check, mode }]
   })
-  if (enabled.length === 0) return { status: 'ignored', reason: 'disabled' }
+  if (enabled.length === 0) {
+    logIgnored({ reason: 'disabled', requested: [...requested], modes })
+    return { status: 'ignored', reason: 'disabled' }
+  }
 
   const token = await withGitHubRetry(() => getInstallationToken(info.installationId))
   const snapshot = loadDocsCheckSnapshot({
