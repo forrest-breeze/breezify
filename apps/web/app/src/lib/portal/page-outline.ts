@@ -17,11 +17,10 @@ export interface PortalPageOutlinePage {
   presentation: PortalPagePresentation
 }
 
-/** A portal project's Home and its pages. */
+/** A portal's Home and its pages. */
 export interface PortalPageOutline {
   slug: string
   displayName: string
-  isDefault: boolean
   /** Home's content: the project scope. Null is the whole workspace. */
   scope: PortalScopeEntry[] | null
   /** Home's slot among `pages` in the portal's navigation order. */

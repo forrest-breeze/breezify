@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-// OpenAPI is the default integration page; GitHub sync sits beside it.
+// GitHub is the default integration page.
 export default function IntegrationsIndex(): never {
-  redirect("/settings/integrations/openapi");
+  redirect("/settings/integrations/github");
 }

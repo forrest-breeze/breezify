@@ -505,56 +505,57 @@ export async function listPortalProjects(
 }
 
 /**
- * Every portal project's Home and pages, for the editor's document tree, which
- * groups content by page. Pages come from the project's draft (what the builder
- * is editing), else its published layout. Read-only, and it carries only
- * titles, slugs and folder/document ids, so callers may serve it to any
- * workspace member.
+ * The root portal's Home and pages, for the editor's document tree, which
+ * groups content by page. The root portal is the one the portal builder edits:
+ * the default project, else the first listed. Projects made before a workspace
+ * had one portal still serve but are not editable, so they are left out.
+ *
+ * Pages come from the draft (what the builder is editing), else the published
+ * layout. Read-only, and it carries only titles, slugs and folder/document ids,
+ * so callers may serve it to any workspace member.
  */
-export async function listPortalPageOutlines(
+export async function getRootPortalPageOutline(
   workspaceId: string,
-): Promise<PortalPageOutline[]> {
+): Promise<PortalPageOutline | null> {
+  const projects = await listPortalProjects(workspaceId)
+  const root = projects.find((project) => project.isDefault) ?? projects[0]
+  if (!root) return null
+
   const admin = createAdminClient()
-  const [projects, { data: rows, error }] = await Promise.all([
-    listPortalProjects(workspaceId),
-    admin
-      .from("workspace_experiences")
-      .select("slug, status, version, spec")
-      .eq("workspace_id", workspaceId)
-      .eq("kind", KB_KIND)
-      .eq("audience", PUBLIC_AUDIENCE)
-      .in("status", ["draft", "published"]),
-  ])
+  const { data: rows, error } = await admin
+    .from("workspace_experiences")
+    .select("status, version, spec")
+    .eq("workspace_id", workspaceId)
+    .eq("kind", KB_KIND)
+    .eq("audience", PUBLIC_AUDIENCE)
+    .eq("slug", root.slug)
+    .in("status", ["draft", "published"])
   if (error) {
     throw new Error(`portal experiences: page outline lookup failed: ${error.message}`)
   }
 
-  const layoutBySlug = new Map<string, { draft: boolean; version: number; spec: unknown }>()
+  let layout: { draft: boolean; version: number; spec: unknown } | null = null
   for (const row of (rows ?? []) as Array<{
-    slug: string | null
     status: string
     version: number
     spec: unknown
   }>) {
-    if (!row.slug) continue
     const draft = row.status === "draft"
-    const current = layoutBySlug.get(row.slug)
     if (
-      !current ||
-      (draft && !current.draft) ||
-      (draft === current.draft && row.version > current.version)
+      !layout ||
+      (draft && !layout.draft) ||
+      (draft === layout.draft && row.version > layout.version)
     ) {
-      layoutBySlug.set(row.slug, { draft, version: row.version, spec: row.spec })
+      layout = { draft, version: row.version, spec: row.spec }
     }
   }
 
-  return projects.map((project) => ({
-    slug: project.slug,
-    displayName: project.displayName,
-    isDefault: project.isDefault,
-    scope: project.scope,
-    ...portalPageOutlineFromSpec(layoutBySlug.get(project.slug)?.spec),
-  }))
+  return {
+    slug: root.slug,
+    displayName: root.displayName,
+    scope: root.scope,
+    ...portalPageOutlineFromSpec(layout?.spec),
+  }
 }
 
 /**

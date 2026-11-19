@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/client"
 import {
   useDocuments,
   useFolders,
-  usePortalPageOutlines,
+  usePortalPageOutline,
   useWorkspace,
 } from "@/hooks/swr"
 import { useHasHydrated } from "@/hooks/use-has-hydrated"
@@ -1769,7 +1769,7 @@ export function DocumentsSubNav({
   // Without portal pages, or if they fail to load, the tree keeps its plain
   // folder layout.
   const pageRootsEnabled = routeRoot === "editor" && !useBuilderChrome
-  const { data: pageOutlines, error: pageOutlinesError } = usePortalPageOutlines({
+  const { data: pageOutline, error: pageOutlineError } = usePortalPageOutline({
     workspaceId,
     enabled: pageRootsEnabled,
   })
@@ -1801,15 +1801,15 @@ export function DocumentsSubNav({
   }, [pageRootsEnabled, rawDocs, rawFolders])
   const pageRootTree = useMemo(
     () =>
-      pageOutlines && portalScopeContext
+      pageOutline?.portal && portalScopeContext
         ? buildEditorPageRoots({
-            projects: pageOutlines.projects,
+            portal: pageOutline.portal,
             folders: sortedFolders,
             docs: filteredDocs,
             scopeContext: portalScopeContext,
           })
         : null,
-    [filteredDocs, pageOutlines, portalScopeContext, sortedFolders],
+    [filteredDocs, pageOutline, portalScopeContext, sortedFolders],
   )
   // What the rows render from: the page grouping when there is one.
   const treeFoldersByParent: Map<string | null, FolderItem[]> =
@@ -3150,7 +3150,7 @@ export function DocumentsSubNav({
     loadedWorkspaceId !== workspaceId ||
     (docsLoading && !rawDocs) ||
     (foldersLoading && !rawFolders) ||
-    (pageRootsEnabled && !pageOutlines && !pageOutlinesError)
+    (pageRootsEnabled && !pageOutline && !pageOutlineError)
 
   // Editor has no landing page: bare /editor opens the tree's first document
   // in place once the tree has loaded. Replace rather than push, so Back
@@ -3166,8 +3166,8 @@ export function DocumentsSubNav({
     )
   }, [firstTreeDocId, isLoading, pathname, routeRoot])
 
-  // Home's root (the first project's): where the toolbar's New Doc / New
-  // Folder put content when nothing more specific is selected.
+  // Home's root: where the toolbar's New Doc / New Folder put content when
+  // nothing more specific is selected.
   const homePageRoot = pageRootTree?.roots.find((root) => root.kind === "home")
 
   // One tree row each; the page-root and plain layouts share them. Children

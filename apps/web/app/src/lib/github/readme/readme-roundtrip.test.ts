@@ -406,7 +406,7 @@ describe('ReadMe-format GitHub sync: linking a workspace that already has pages'
     await sync()
     expect(store.document('API keys').content).toBe('Written in Breezify.')
 
-    // "Use GitHub" takes the repository's version and keeps the old one in history.
+    // "Reset from GitHub" takes the repository's version and keeps the old one in history.
     await sync({ mode: 'replace_breezify' })
     expect(store.document('API keys').content).toBe('Rotate keys often.')
     expect(store.document('API keys').metadata?.github_hosted_conflict).toBe(false)
@@ -538,7 +538,7 @@ describe('ReadMe-format GitHub sync: linking a workspace that already has pages'
     expect(store.document('Notes').id).toBe(notes.id)
   })
 
-  it('"Use GitHub" trashes the pages the repository does not have and removes the folders that empties', async () => {
+  it('"Reset from GitHub" trashes the pages the repository does not have and removes the folders that empties', async () => {
     const { store, sync, inspect } = harness()
     await sync()
     const imported = store.authorFolder('Imported docs')
@@ -580,7 +580,7 @@ describe('ReadMe-format GitHub sync: linking a workspace that already has pages'
     expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0 })
   })
 
-  it('"Use GitHub" clears nothing when the repository has no pages to show for it', async () => {
+  it('"Reset from GitHub" clears nothing when the repository has no pages to show for it', async () => {
     const { store, sync } = harness({ 'README.md': '# Not a docs project\n' })
     const kept = store.authorDocument({ title: 'Only here', content: 'Ours.', publicSlug: 'only-here' })
     const folder = store.authorFolder('Ours')
@@ -753,7 +753,7 @@ describe('ReadMe-format GitHub sync: workspace -> repository', () => {
     expect(store.document('Terms').content).toBe('New terms.')
   })
 
-  it('"Use GitHub" restores everything the repository has', async () => {
+  it('"Reset from GitHub" restores everything the repository has', async () => {
     const { store, sync } = harness()
     await sync()
     store.deleteInBreezify('Terms')

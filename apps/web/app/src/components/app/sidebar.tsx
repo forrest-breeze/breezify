@@ -144,7 +144,7 @@ const navigationSections: NavSection[] = [
       {
         label: "Integrations",
         href: "/settings/integrations",
-        linkHref: "/settings/integrations/openapi",
+        linkHref: "/settings/integrations/github",
         icon: Plugs,
         tourId: "integrations",
       },

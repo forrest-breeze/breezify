@@ -118,12 +118,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       )
     }
     if (source.format === 'readme') {
-      // A ReadMe-format link has no per-file revert yet. "Use GitHub" in
+      // A ReadMe-format link has no per-file revert yet. "Reset from GitHub" in
       // Settings discards every unpublished workspace change instead.
       return privateJson(
         {
           error:
-            'Reverting single files is not available for a ReadMe-format repository. To discard workspace changes, re-sync with "Use GitHub" in GitHub settings.',
+            'Reverting single files is not available for a ReadMe-format repository. To discard workspace changes, use "Reset from GitHub" in GitHub settings.',
           code: 'revert_not_supported',
         },
         409,

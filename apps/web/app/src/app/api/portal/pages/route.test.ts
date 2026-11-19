@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const { mockRequireRouteUser, mockGetActiveWorkspace, mockListPortalPageOutlines } =
+const { mockRequireRouteUser, mockGetActiveWorkspace, mockGetRootPortalPageOutline } =
   vi.hoisted(() => ({
     mockRequireRouteUser: vi.fn(),
     mockGetActiveWorkspace: vi.fn(),
-    mockListPortalPageOutlines: vi.fn(),
+    mockGetRootPortalPageOutline: vi.fn(),
   }))
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -20,7 +20,7 @@ vi.mock("@/lib/db/workspace", () => ({
 }))
 
 vi.mock("@/lib/portal/experiences-write", () => ({
-  listPortalPageOutlines: mockListPortalPageOutlines,
+  getRootPortalPageOutline: mockGetRootPortalPageOutline,
 }))
 
 import { GET } from "./route"
@@ -29,16 +29,13 @@ describe("GET /api/portal/pages", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockRequireRouteUser.mockResolvedValue({ user: { id: "user-1" }, response: null })
-    mockListPortalPageOutlines.mockResolvedValue([
-      {
-        slug: "docs",
-        displayName: "Docs",
-        isDefault: true,
-        scope: null,
-        homePosition: 0,
-        pages: [],
-      },
-    ])
+    mockGetRootPortalPageOutline.mockResolvedValue({
+      slug: "docs",
+      displayName: "Docs",
+      scope: null,
+      homePosition: 0,
+      pages: [],
+    })
   })
 
   it("serves any workspace member, not only admins", async () => {
@@ -51,9 +48,9 @@ describe("GET /api/portal/pages", () => {
     const res = await GET()
 
     expect(res.status).toBe(200)
-    expect(mockListPortalPageOutlines).toHaveBeenCalledWith("ws-1")
-    const body = (await res.json()) as { projects: Array<{ slug: string }> }
-    expect(body.projects.map((p) => p.slug)).toEqual(["docs"])
+    expect(mockGetRootPortalPageOutline).toHaveBeenCalledWith("ws-1")
+    const body = (await res.json()) as { portal: { slug: string } | null }
+    expect(body.portal?.slug).toBe("docs")
   })
 
   it("requires a signed-in user", async () => {
@@ -63,7 +60,7 @@ describe("GET /api/portal/pages", () => {
     const res = await GET()
 
     expect(res.status).toBe(401)
-    expect(mockListPortalPageOutlines).not.toHaveBeenCalled()
+    expect(mockGetRootPortalPageOutline).not.toHaveBeenCalled()
   })
 
   it("requires an active workspace", async () => {
@@ -72,7 +69,7 @@ describe("GET /api/portal/pages", () => {
     const res = await GET()
 
     expect(res.status).toBe(400)
-    expect(mockListPortalPageOutlines).not.toHaveBeenCalled()
+    expect(mockGetRootPortalPageOutline).not.toHaveBeenCalled()
   })
 
   it("reports a failed lookup without details", async () => {
@@ -82,7 +79,7 @@ describe("GET /api/portal/pages", () => {
       workspace_id: "ws-1",
       role: "viewer",
     })
-    mockListPortalPageOutlines.mockRejectedValue(new Error("db down"))
+    mockGetRootPortalPageOutline.mockRejectedValue(new Error("db down"))
 
     const res = await GET()
 

@@ -143,23 +143,24 @@ export function usePortalProjects(
   )
 }
 
-export interface PortalPageOutlinesResult {
-  projects: PortalPageOutline[]
+export interface PortalPageOutlineResult {
+  /** Null when the workspace has no portal yet. */
+  portal: PortalPageOutline | null
 }
 
 /**
- * Every portal project's Home and pages, for grouping the editor's document
- * tree by page. Readable by any workspace member. Workspace-scoped key, for the
- * same reason as usePortalProjects.
+ * The root portal's Home and pages, for grouping the editor's document tree by
+ * page. Readable by any workspace member. Workspace-scoped key, for the same
+ * reason as usePortalProjects.
  */
-export function usePortalPageOutlines(
-  config?: SWRConfiguration<PortalPageOutlinesResult> & {
+export function usePortalPageOutline(
+  config?: SWRConfiguration<PortalPageOutlineResult> & {
     workspaceId?: string
     enabled?: boolean
   },
 ) {
   const { workspaceId, enabled = true, ...swrConfig } = config ?? {}
-  return useSWR<PortalPageOutlinesResult>(
+  return useSWR<PortalPageOutlineResult>(
     enabled && workspaceId ? (["/api/portal/pages", workspaceId] as const) : null,
     scopedFetcher,
     { revalidateOnFocus: true, ...swrConfig },

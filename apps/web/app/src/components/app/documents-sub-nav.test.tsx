@@ -24,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
   foldersData: undefined as Array<Record<string, unknown>> | undefined,
   documentsLoading: true,
   foldersLoading: true,
-  pageOutlines: { projects: [] } as { projects: Array<Record<string, unknown>> },
+  pageOutline: { portal: null } as { portal: Record<string, unknown> | null },
 }))
 
 vi.mock("next/navigation", () => ({
@@ -63,8 +63,8 @@ vi.mock("@/hooks/swr", () => ({
   useWorkspace: () => ({
     data: { id: "ws-1" },
   }),
-  usePortalPageOutlines: (options?: { enabled?: boolean }) => ({
-    data: options?.enabled ? hoisted.pageOutlines : undefined,
+  usePortalPageOutline: (options?: { enabled?: boolean }) => ({
+    data: options?.enabled ? hoisted.pageOutline : undefined,
     error: undefined,
   }),
 }))
@@ -133,7 +133,7 @@ afterEach(() => {
   hoisted.foldersData = undefined
   hoisted.documentsLoading = true
   hoisted.foldersLoading = true
-  hoisted.pageOutlines = { projects: [] }
+  hoisted.pageOutline = { portal: null }
   window.localStorage.clear()
 })
 
@@ -934,25 +934,22 @@ describe("DocumentsSubNav editor page roots", () => {
       doc("doc-charge", "Create a charge", "payments"),
       doc("doc-runbook", "Refund runbook", "runbooks"),
     ]
-    hoisted.pageOutlines = {
-      projects: [
-        {
-          slug: "breeze",
-          displayName: "Breeze",
-          isDefault: true,
-          scope: [{ id: "docs-root", promote: true, rootOnly: true }, "guide"],
-          homePosition: 0,
-          pages: [
-            {
-              id: "page-api",
-              title: "API Reference",
-              slug: "api-reference",
-              scope: ["api-root"],
-              presentation: "api_reference",
-            },
-          ],
-        },
-      ],
+    hoisted.pageOutline = {
+      portal: {
+        slug: "breeze",
+        displayName: "Breeze",
+        scope: [{ id: "docs-root", promote: true, rootOnly: true }, "guide"],
+        homePosition: 0,
+        pages: [
+          {
+            id: "page-api",
+            title: "API Reference",
+            slug: "api-reference",
+            scope: ["api-root"],
+            presentation: "api_reference",
+          },
+        ],
+      },
     }
   }
 
@@ -1000,17 +997,14 @@ describe("DocumentsSubNav editor page roots", () => {
 
   it("keeps the plain folder tree when the portal has no pages of its own", () => {
     seedWorkspace()
-    hoisted.pageOutlines = {
-      projects: [
-        {
-          slug: "breeze",
-          displayName: "Breeze",
-          isDefault: true,
-          scope: null,
-          homePosition: 0,
-          pages: [],
-        },
-      ],
+    hoisted.pageOutline = {
+      portal: {
+        slug: "breeze",
+        displayName: "Breeze",
+        scope: null,
+        homePosition: 0,
+        pages: [],
+      },
     }
     render(<DocumentsSubNav routeRoot="editor" />)
 

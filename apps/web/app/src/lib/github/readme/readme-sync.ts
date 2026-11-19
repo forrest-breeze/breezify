@@ -1030,7 +1030,7 @@ export async function syncReadmeRepository(
   ])
   let finalDocuments = listedDocuments
 
-  // --- Pages the repository does not have ("Use GitHub") ----------------------
+  // --- Pages the repository does not have ("Reset from GitHub") ----------------------
   // Replace mode makes the workspace match the repository, so a page that is
   // not one of its files goes to the trash: one that was only ever in
   // Breezify, one whose first publish is still pending, one that outlived its

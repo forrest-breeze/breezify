@@ -12,8 +12,9 @@ import type { PortalScopeEntry } from "@/lib/public-kb"
 //
 // The editor lists every workspace document. When the portal has pages (an API
 // reference, a changelog, ...), the tree's top level is one root per page, so
-// each page reads as a root folder: Home ("Documents"), then each page, then
-// "Not in portal" for content no page shows.
+// each page reads as a root folder: Home ("Documents") and each page in the
+// portal's navigation order, then "Not in portal" for content no page shows.
+// Only the workspace's root portal counts, the one the portal builder edits.
 //
 // The grouping is display only. Folders keep their real parents (the GitHub
 // sync maps each top-level folder to a docs/<Category> directory), so moving
@@ -31,8 +32,6 @@ import type { PortalScopeEntry } from "@/lib/public-kb"
 //    folder a page includes moves there even from inside a Home folder. A
 //    folder no page shows in full stays with its parent. A document stays with
 //    its folder unless a page picks it by itself.
-//  - A Home that covers the whole workspace claims last, after every page and
-//    every other portal's Home.
 // ---------------------------------------------------------------------------
 
 export type EditorPageRootKind = "home" | "page" | "unplaced"
@@ -75,11 +74,8 @@ interface TreeDoc {
   folder_id: string | null
 }
 
+export const HOME_ROOT_KEY = "page-root:home"
 export const UNPLACED_ROOT_KEY = "page-root:unplaced"
-
-export function isEditorPageRootKey(key: string): boolean {
-  return key.startsWith("page-root:")
-}
 
 interface Group {
   root: EditorPageRoot
@@ -105,35 +101,50 @@ function folderEntryOf(
 }
 
 /**
- * Group the editor tree by portal page. Returns null when no portal has a page
- * with content of its own, so the tree keeps its plain folder layout.
+ * Folders whose parent chain loops back on itself. The folders API only stops
+ * a folder from being its own parent, so two concurrent moves can still make a
+ * loop, and the scope-tree helpers would never finish walking one.
+ */
+function cyclicFolderIds(folders: readonly TreeFolder[]): Set<string> {
+  const parentById = new Map(folders.map((folder) => [folder.id, folder.parent_folder_id]))
+  const cyclic = new Set<string>()
+  for (const folder of folders) {
+    const seen = new Set<string>()
+    let current: string | null = folder.id
+    while (current && parentById.has(current)) {
+      if (seen.has(current)) {
+        cyclic.add(folder.id)
+        break
+      }
+      seen.add(current)
+      current = parentById.get(current) ?? null
+    }
+  }
+  return cyclic
+}
+
+/**
+ * Group the editor tree by the root portal's pages. Returns null when no page
+ * has content of its own, so the tree keeps its plain folder layout.
  *
  * `folders` and `docs` are the rows to place, in display order (`docs` may be
  * narrowed by a search). `scopeContext` is every portal-eligible folder and
  * document, which page scopes are resolved against.
  */
 export function buildEditorPageRoots<F extends TreeFolder, D extends TreeDoc>(input: {
-  projects: readonly PortalPageOutline[]
+  portal: PortalPageOutline
   folders: readonly F[]
   docs: readonly D[]
   scopeContext: Pick<ScopeTreeContext, "folders" | "docs">
 }): EditorPageRootTree<F, D> | null {
-  const { projects, folders, docs, scopeContext } = input
-  const hasOwnPages = projects.some((project) =>
-    project.pages.some((page) => page.scope !== null),
-  )
-  if (!hasOwnPages) return null
+  const { portal, folders, docs, scopeContext } = input
+  if (!portal.pages.some((page) => page.scope !== null)) return null
 
-  const ctx: ScopeTreeContext = { ...scopeContext, rootId: null }
-  const eligibleFolderIds = new Set(scopeContext.folders.map((folder) => folder.id))
+  const cyclic = cyclicFolderIds(scopeContext.folders)
+  const ctxFolders = scopeContext.folders.filter((folder) => !cyclic.has(folder.id))
+  const ctx: ScopeTreeContext = { folders: ctxFolders, docs: scopeContext.docs, rootId: null }
+  const eligibleFolderIds = new Set(ctxFolders.map((folder) => folder.id))
   const eligibleDocIds = new Set(scopeContext.docs.map((doc) => doc.id))
-  const multipleProjects = projects.length > 1
-
-  // Roots in display order; claim order puts each project's own pages ahead of
-  // every Home.
-  const displayGroups: Group[] = []
-  const pageGroups: Group[] = []
-  const homeGroups: Group[] = []
   const hiddenFolderIds = new Set<string>()
 
   const makeGroup = (
@@ -164,46 +175,28 @@ export function buildEditorPageRoots<F extends TreeFolder, D extends TreeDoc>(in
     }
   }
 
-  for (const project of projects) {
-    const prefix = multipleProjects && !project.isDefault ? project.displayName : null
-    const home = makeGroup(
-      {
-        key: `page-root:${project.slug}:home`,
-        kind: "home",
-        title: prefix ?? "Documents",
-        presentation: null,
-      },
-      project.scope,
-      false,
-    )
-    homeGroups.push(home)
-
-    const projectGroups: Group[] = []
-    for (const page of project.pages) {
-      if (page.scope === null) continue
-      const group = makeGroup(
+  const home = makeGroup(
+    { key: HOME_ROOT_KEY, kind: "home", title: "Documents", presentation: null },
+    portal.scope,
+    false,
+  )
+  const pageGroups: Group[] = []
+  for (const page of portal.pages) {
+    // A page that follows Home has nothing of its own to show.
+    if (page.scope === null) continue
+    pageGroups.push(
+      makeGroup(
         {
-          key: `page-root:${project.slug}:page:${page.id}`,
+          key: `page-root:page:${page.id}`,
           kind: "page",
-          title: prefix ? `${prefix} · ${page.title}` : page.title,
+          title: page.title,
           presentation: page.presentation,
         },
         page.scope,
         page.presentation === "api_reference",
-      )
-      projectGroups.push(group)
-      pageGroups.push(group)
-    }
-
-    // Home takes its slot in the project's navigation order. Pages that follow
-    // Home were skipped, so count only the pages placed before its slot.
-    const homeSlot = project.pages
-      .slice(0, project.homePosition)
-      .filter((page) => page.scope !== null).length
-    projectGroups.splice(homeSlot, 0, home)
-    displayGroups.push(...projectGroups)
+      ),
+    )
   }
-
   const unplaced: Group = {
     root: {
       key: UNPLACED_ROOT_KEY,
@@ -216,13 +209,7 @@ export function buildEditorPageRoots<F extends TreeFolder, D extends TreeDoc>(in
     scope: [],
     view: null,
   }
-  // Pages first, then Homes that name their content, then Homes that cover the
-  // whole workspace: those are the catch-all and claim only what is left.
-  const claimOrder = [
-    ...pageGroups,
-    ...homeGroups.filter((group) => group.scope !== null),
-    ...homeGroups.filter((group) => group.scope === null),
-  ]
+  const claimOrder = [...pageGroups, home]
 
   // A document a scope picks by itself goes to the first group that picks it.
   const docClaims = new Map<string, Group>()
@@ -315,11 +302,14 @@ export function buildEditorPageRoots<F extends TreeFolder, D extends TreeDoc>(in
     rootKeyByItemId.set(doc.id, group.root.key)
   }
 
-  const roots = displayGroups.map((group) => group.root)
-  if (
-    foldersByParent.has(UNPLACED_ROOT_KEY) ||
-    docsByParent.has(UNPLACED_ROOT_KEY)
-  ) {
+  // Home takes its slot in the portal's navigation order. Pages that follow
+  // Home have no root, so count only the pages with one before Home's slot.
+  const roots = pageGroups.map((group) => group.root)
+  const homeSlot = portal.pages
+    .slice(0, portal.homePosition)
+    .filter((page) => page.scope !== null).length
+  roots.splice(homeSlot, 0, home.root)
+  if (foldersByParent.has(UNPLACED_ROOT_KEY) || docsByParent.has(UNPLACED_ROOT_KEY)) {
     roots.push(unplaced.root)
   }
 

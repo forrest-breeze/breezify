@@ -53,7 +53,7 @@ and when Settings is opened with a newer commit on the branch.
 - A page changed only on GitHub replaces the workspace copy; the previous
   version is kept in the document's history.
 - A page changed on both sides is a **conflict**: Breezify keeps its version and
-  flags the document. Publishing asks before overwriting GitHub; "Use GitHub"
+  flags the document. Publishing asks before overwriting GitHub; "Reset from GitHub"
   takes the repository's version everywhere.
 - A renamed or moved file keeps its document (matched by identical content,
   then by file name).
@@ -63,14 +63,14 @@ and when Settings is opened with a newer commit on the branch.
   repository into a workspace that already has the same docs work. The page
   keeps its id, URL and history and moves into the repository's folder. If its
   text differs from the file, it is flagged as a conflict and Breezify's text
-  stays until someone publishes it or chooses "Use GitHub". Pages in
+  stays until someone publishes it or chooses "Reset from GitHub". Pages in
   role-restricted folders, API reference pages, and pages that were ever tied
   to a repository file are never adopted. A folder the adopted pages leave is
   removed if that empties it (no pages, no child folders, no landing content),
   and so are its parents once they are empty too.
 - A file deleted on GitHub removes its document, unless the document was edited
   in Breezify, in which case it is kept and flagged.
-- **"Use GitHub"** makes the workspace match the repository. Besides taking the
+- **"Reset from GitHub"** makes the workspace match the repository. Besides taking the
   repository's version of every linked page, it moves the pages that are not in
   the repository to the trash and removes the folders that leaves empty. API
   reference pages and anything in a role-restricted folder are kept: the sync
@@ -198,7 +198,7 @@ Definitions in `reference/` (JSON or YAML) go through the same source sync as
 - Breezify does not create the per-operation stub pages ReadMe writes into
   `reference/`, and Markdown added to a stub is not shown.
 - No per-file revert, and conflicts are resolved for the whole workspace
-  (publish with Breezify winning, or "Use GitHub"), not per document.
+  (publish with Breezify winning, or "Reset from GitHub"), not per document.
 - Limits: 1,000 pages, 512 KB per page, 2 MB and 500 operations per definition.
 
 ## Tests

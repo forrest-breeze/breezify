@@ -9,8 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHasHydrated } from "@/hooks/use-has-hydrated";
 import { cn } from "@/lib/utils";
-import { FileJson } from "lucide-react";
-import { useGithubHostedDocs, useOpenApiSources } from "@/hooks/swr";
+import { useGithubHostedDocs } from "@/hooks/swr";
 
 // ---------------------------------------------------------------------------
 // Settings → Integrations layout.
@@ -38,12 +37,6 @@ function GitHubMark({ className }: { className?: string }): React.JSX.Element {
 // so their rows render a loading skeleton then an "on" badge.
 const CONNECTED_APPS: IntegrationDef[] = [
   {
-    id: "openapi",
-    name: "OpenAPI",
-    icon: FileJson,
-    href: "/settings/integrations/openapi",
-  },
-  {
     id: "github",
     name: "GitHub",
     icon: GitHubMark,
@@ -58,7 +51,6 @@ export default function IntegrationsLayout({
 }): React.JSX.Element {
   const pathname = usePathname();
 
-  const openApi = useOpenApiSources();
   const hostedDocs = useGithubHostedDocs();
   // The SWR cache is seeded synchronously on the client, so `isLoading` is
   // false on the first client render while the server always rendered the
@@ -71,12 +63,6 @@ export default function IntegrationsLayout({
   // and then popping the "on" badge in once data arrives.
   type IntegrationStatus = "connected" | "not_connected" | "loading";
   const statusFor = (id: string): IntegrationStatus => {
-    if (id === "openapi")
-      return openApi.isLoading
-        ? "loading"
-        : (openApi.data?.sources.length ?? 0) > 0
-          ? "connected"
-          : "not_connected";
     if (id === "github")
       return hostedDocs.isLoading
         ? "loading"
