@@ -24,6 +24,7 @@ type OpenApiMethod = (typeof OPENAPI_METHODS)[number]
 const MAX_SCHEMA_DEPTH = 6
 const MAX_TABLE_PROPERTIES = 50
 const UNTAGGED_GROUP = 'Endpoints'
+const WEBHOOK_GROUP = 'Webhooks'
 
 type JsonObject = Record<string, unknown>
 
@@ -33,9 +34,13 @@ export interface OpenApiSpecIssue {
 }
 
 export interface GeneratedOpenApiOperation {
-  /** Stable identity within one spec file: `GET /pets/{id}`. */
+  /**
+   * Stable identity within one spec file: `GET /pets/{id}`, or
+   * `POST webhook:petAdopted` for a webhook.
+   */
   key: string
   method: Uppercase<OpenApiMethod>
+  /** The endpoint's path, or a webhook's name. */
   path: string
   title: string
   content: string
@@ -244,6 +249,8 @@ interface OperationContext {
   isSwagger2: boolean
   pathItem: JsonObject
   operation: JsonObject
+  /** A webhook (OpenAPI 3.1 `webhooks`): the request body is what is sent. */
+  webhook?: boolean
 }
 
 function renderParameters(context: OperationContext): string[] {
@@ -326,7 +333,7 @@ function renderRequestBody(context: OperationContext): string[] {
     required = body.required === true
   }
 
-  const lines = ['## Request body', '']
+  const lines = [context.webhook ? '## Payload' : '## Request body', '']
   lines.push(`\`${mediaType}\`${required ? ' (required)' : ''}`, '')
   if (description) lines.push(description, '')
   const table = propertyTable(schema, resolve)
@@ -437,7 +444,9 @@ export function parseHostedOpenApiSpec(input: {
   if (!/^3\.[01]\./.test(openapi) && !isSwagger2) {
     return fail('must declare `openapi: 3.0.x`, `openapi: 3.1.x`, or `swagger: 2.0`')
   }
-  if (!isObject(parsed.paths)) return fail('must contain a `paths` object')
+  // OpenAPI 3.1 allows a definition with webhooks and no paths.
+  const webhooks = !isSwagger2 && isObject(parsed.webhooks) ? parsed.webhooks : null
+  if (!isObject(parsed.paths) && !webhooks) return fail('must contain a `paths` object')
 
   const info = isObject(parsed.info) ? parsed.info : {}
   const declaredTags = Array.isArray(parsed.tags)
@@ -449,43 +458,58 @@ export function parseHostedOpenApiSpec(input: {
 
   const operations: GeneratedOpenApiOperation[] = []
   const countByTag = new Map<string, number>()
-  for (const [path, rawPathItem] of Object.entries(parsed.paths)) {
-    const pathItem = resolve(rawPathItem).value
-    if (!isObject(pathItem)) continue
-    for (const method of OPENAPI_METHODS) {
-      const operation = pathItem[method]
-      if (!isObject(operation)) continue
-      const upper = method.toUpperCase() as Uppercase<OpenApiMethod>
-      const key = `${upper} ${path}`
-      const tags = Array.isArray(operation.tags) ? operation.tags.map(text).filter(Boolean) : []
-      const tag = tags[0] ?? UNTAGGED_GROUP
-      if (!tagOrder.has(tag)) tagOrder.set(tag, tagOrder.size)
-      const order = countByTag.get(tag) ?? 0
-      countByTag.set(tag, order + 1)
-      const operationSlug = slugify(text(operation.operationId) || `${method} ${path}`)
-        .slice(0, 40)
-        .replace(/-+$/g, '')
-      operations.push({
-        key,
-        method: upper,
-        path,
-        title: text(operation.summary) || text(operation.operationId) || key,
-        content: renderOperation(upper, path, {
-          spec: parsed,
-          resolve,
-          isSwagger2,
-          pathItem,
-          operation,
-        }),
-        tag,
-        tagOrder: tagOrder.get(tag)!,
-        order,
-        // The hash keeps slugs unique even when truncation or slugification
-        // makes two operations look alike.
-        publicSlug: `${input.slugPrefix ?? `github-${input.repoId}`}-${specSlug}-${operationSlug}-${shortHash(`${input.specPath}\0${key}`)}`,
-      })
+  const addOperations = (
+    entries: Array<[string, unknown]>,
+    webhook: boolean,
+  ): void => {
+    for (const [name, rawPathItem] of entries) {
+      const pathItem = resolve(rawPathItem).value
+      if (!isObject(pathItem)) continue
+      for (const method of OPENAPI_METHODS) {
+        const operation = pathItem[method]
+        if (!isObject(operation)) continue
+        const upper = method.toUpperCase() as Uppercase<OpenApiMethod>
+        // A webhook is named, not addressed by a path; its key cannot collide
+        // with an endpoint's, which always starts with a slash.
+        const key = webhook ? `${upper} webhook:${name}` : `${upper} ${name}`
+        const tags = Array.isArray(operation.tags) ? operation.tags.map(text).filter(Boolean) : []
+        const tag = tags[0] ?? (webhook ? WEBHOOK_GROUP : UNTAGGED_GROUP)
+        if (!tagOrder.has(tag)) tagOrder.set(tag, tagOrder.size)
+        const order = countByTag.get(tag) ?? 0
+        countByTag.set(tag, order + 1)
+        const operationSlug = slugify(
+          text(operation.operationId) || (webhook ? `webhook ${name}` : `${method} ${name}`),
+        )
+          .slice(0, 40)
+          .replace(/-+$/g, '')
+        operations.push({
+          key,
+          method: upper,
+          path: name,
+          title:
+            text(operation.summary) ||
+            text(operation.operationId) ||
+            (webhook ? `${name} webhook` : key),
+          content: renderOperation(upper, webhook ? `${name} (webhook)` : name, {
+            spec: parsed,
+            resolve,
+            isSwagger2,
+            pathItem,
+            operation,
+            webhook,
+          }),
+          tag,
+          tagOrder: tagOrder.get(tag)!,
+          order,
+          // The hash keeps slugs unique even when truncation or slugification
+          // makes two operations look alike.
+          publicSlug: `${input.slugPrefix ?? `github-${input.repoId}`}-${specSlug}-${operationSlug}-${shortHash(`${input.specPath}\0${key}`)}`,
+        })
+      }
     }
   }
+  addOperations(isObject(parsed.paths) ? Object.entries(parsed.paths) : [], false)
+  addOperations(webhooks ? Object.entries(webhooks) : [], true)
   if (operations.length === 0) return fail('does not define any operations')
   if (operations.length > MAX_OPENAPI_OPERATIONS) {
     return fail(`defines ${operations.length} operations; the limit is ${MAX_OPENAPI_OPERATIONS}`)

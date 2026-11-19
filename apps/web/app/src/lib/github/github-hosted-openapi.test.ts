@@ -233,6 +233,70 @@ describe('parseHostedOpenApiSpec', () => {
   })
 })
 
+describe('parseHostedOpenApiSpec webhooks', () => {
+  const withWebhooks = {
+    openapi: '3.1.0',
+    info: { title: 'Payments', version: '1.0.0' },
+    paths: {
+      '/charges': {
+        post: { summary: 'Create a charge', responses: { '200': { description: 'OK' } } },
+      },
+    },
+    webhooks: {
+      PAYMENT_SUCCEEDED: {
+        post: {
+          summary: 'Payment succeeded',
+          description: 'Sent when a payment page reaches the PAID state.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['type'],
+                  properties: { type: { type: 'string', enum: ['PAYMENT_SUCCEEDED'] } },
+                },
+              },
+            },
+          },
+          responses: { '200': { description: 'Acknowledged' } },
+        },
+      },
+      REFUND_STATUS_UPDATE: {
+        post: { tags: ['Refunds'], responses: { '200': { description: 'Acknowledged' } } },
+      },
+    },
+  }
+
+  it('generates a page per webhook after the endpoints', () => {
+    const { spec, issues } = parse(withWebhooks)
+    expect(issues).toEqual([])
+    expect(spec?.operations.map((op) => [op.key, op.tag, op.title])).toEqual([
+      ['POST /charges', 'Endpoints', 'Create a charge'],
+      ['POST webhook:PAYMENT_SUCCEEDED', 'Webhooks', 'Payment succeeded'],
+      ['POST webhook:REFUND_STATUS_UPDATE', 'Refunds', 'REFUND_STATUS_UPDATE webhook'],
+    ])
+  })
+
+  it('describes the webhook and its payload, not an endpoint path', () => {
+    const { spec } = parse(withWebhooks)
+    const webhook = spec!.operations[1]!
+    expect(webhook.path).toBe('PAYMENT_SUCCEEDED')
+    expect(webhook.content).toContain('POST PAYMENT_SUCCEEDED (webhook)')
+    expect(webhook.content).toContain('## Payload')
+    expect(webhook.content).not.toContain('## Request body')
+    expect(webhook.content).toContain('| `type` |')
+    expect(webhook.publicSlug).not.toEqual(spec!.operations[2]!.publicSlug)
+  })
+
+  it('accepts a 3.1 definition with webhooks and no paths', () => {
+    const { paths: _paths, ...webhooksOnly } = withWebhooks
+    const { spec, issues } = parse(webhooksOnly)
+    expect(issues).toEqual([])
+    expect(spec?.operations).toHaveLength(2)
+  })
+})
+
 describe('openApiFolderName', () => {
   it('is stable per spec and per tag', () => {
     expect(openApiFolderName(42, 'docs/openapi.json')).toBe(openApiFolderName(42, 'docs/openapi.json'))

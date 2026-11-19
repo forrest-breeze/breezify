@@ -129,6 +129,8 @@ function PublishModeField({
   onChange: (value: PublishMode) => void
   disabled?: boolean
 }): React.JSX.Element {
+  // Unique per field: two groups sharing a name act as one radio group.
+  const name = React.useId()
   const options: Array<{ value: PublishMode; title: string; description?: string }> = [
     {
       value: "direct",
@@ -147,7 +149,7 @@ function PublishModeField({
         >
           <input
             type="radio"
-            name="publish-mode"
+            name={name}
             value={option.value}
             checked={value === option.value}
             disabled={disabled}
@@ -320,8 +322,9 @@ function LinkForm({
   const [repoId, setRepoId] = useState<number | null>(initial?.repo_id ?? null)
   const [branch, setBranch] = useState(initial?.branch ?? "")
   const [rootPath, setRootPath] = useState(initial ? sourceRoot(initial) : "")
+  // Switching keeps the current publish mode; it is edited under Publishing below.
   const [publishMode, setPublishMode] = useState<PublishMode>(
-    initial?.publish_mode === "pull_request" ? "pull_request" : "direct",
+    initial ? (initial.publish_mode === "direct" ? "direct" : "pull_request") : "direct",
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
@@ -412,10 +415,12 @@ function LinkForm({
         </div>
       </div>
 
-      <div className="space-y-1.5">
-        <Label>Publishing</Label>
-        <PublishModeField value={publishMode} onChange={setPublishMode} disabled={saving} />
-      </div>
+      {initial ? null : (
+        <div className="space-y-1.5">
+          <Label>Publishing</Label>
+          <PublishModeField value={publishMode} onChange={setPublishMode} disabled={saving} />
+        </div>
+      )}
 
       {error ? (
         <p role="alert" className="text-sm text-destructive">
