@@ -127,6 +127,10 @@ const nextConfig = {
       { source: "/kb", destination: "/knowledge", permanent: false },
       { source: "/kb/doc/:id", destination: "/knowledge/:id", permanent: false },
       { source: "/kb/folder/:id", destination: "/knowledge/folder/:id", permanent: false },
+      // The Changes review was removed; without these the old URLs would be
+      // read as a document id.
+      { source: "/knowledge/changes", destination: "/knowledge", permanent: false },
+      { source: "/editor/changes", destination: "/editor", permanent: false },
     ];
   },
   async rewrites() {

@@ -371,7 +371,8 @@ describe('DELETE /api/folders/[id] — topic guard', () => {
     expect(folderDeleteChain.eq).toHaveBeenCalledWith('workspace_id', 'ws-1')
     expect(folderDeleteChain.eq).toHaveBeenCalledWith('kind', 'topic')
     expect(documentDeleteChain.eq).toHaveBeenCalledWith('document_type', 'topic_page')
-    expect(documentUpdateChain.is).toHaveBeenCalledWith('deleted_at', null)
+    // Trashed documents are unfiled as well, or they would be deleted with the topic.
+    expect(documentUpdateChain.is).not.toHaveBeenCalled()
   })
 })
 
@@ -426,12 +427,20 @@ describe('DELETE /api/folders/[id] — user folder subtree cascade', () => {
 
     expect(res.status).toBe(200)
     expect(payload.success).toBe(true)
-    // Documents across the whole subtree are soft-deleted, not unfiled.
-    expect(documentsBuilder.update).toHaveBeenCalledWith(
-      expect.objectContaining({ deleted_at: expect.any(String) }),
+    // Live documents across the whole subtree are soft-deleted and unfiled...
+    expect(documentsBuilder.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ deleted_at: expect.any(String), folder_id: null }),
     )
     expect(docsUpdateChain.in).toHaveBeenCalledWith('folder_id', [VALID_UUID, 'child-1'])
     expect(docsUpdateChain.is).toHaveBeenCalledWith('deleted_at', null)
+    // ...and so are the ones already in the trash, before any folder goes:
+    // deleting a folder deletes the documents still filed in it.
+    expect(documentsBuilder.update).toHaveBeenNthCalledWith(2, { folder_id: null })
+    expect(docsUpdateChain.is).toHaveBeenCalledTimes(1)
+    expect(documentsBuilder.update.mock.invocationCallOrder[1]).toBeLessThan(
+      foldersBuilder.delete.mock.invocationCallOrder[0]!,
+    )
     // The delete targets the full subtree, so children are not re-rooted.
     expect(foldersDeleteChain.in).toHaveBeenCalledWith('id', [VALID_UUID, 'child-1'])
     expect(foldersDeleteChain.eq).toHaveBeenCalledWith('workspace_id', 'ws-1')

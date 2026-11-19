@@ -93,7 +93,16 @@ export interface ReadmeStore {
       metadata: Record<string, unknown>
     }>,
   ): Promise<void>
-  deleteFolder(id: string): Promise<void>
+  /**
+   * Delete a workspace folder that has nothing live left in it. Returns false
+   * and leaves the folder alone when it still holds a live document of any
+   * kind (including the generated ones `listDocuments` leaves out) or a child
+   * folder. Trashed documents still filed in the folder are moved to the
+   * workspace root first, so they stay in the trash instead of being deleted
+   * along with the folder: the database deletes every document filed in a
+   * folder that is deleted. There is deliberately no unconditional delete.
+   */
+  deleteFolderIfEmpty(id: string): Promise<boolean>
 
   insertDocument(input: {
     title: string

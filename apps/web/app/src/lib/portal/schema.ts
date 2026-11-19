@@ -106,6 +106,8 @@ export type BlockPlacement = z.infer<typeof placementSchema>
 // ----- singleton chrome blocks ----------------------------------------------
 const headerSearchSchema = z.object({
   enabled: z.boolean().default(true),
+  // No longer read or editable: the portal derives the placeholder from whether
+  // Ask AI is live (see PortalSearch). Kept so stored layouts keep parsing.
   placeholder: z.string().max(120).default("Search or ask AI"),
 })
 
@@ -305,7 +307,8 @@ const footerBlockSchema = z.object({
   columns: z.array(footerColumnSchema).max(5).optional(),
   // Social/profile links rendered as icons in the rich footer.
   social: footerSocialListSchema.optional(),
-  showPoweredBy: z.boolean().default(true),
+  // The "Powered by Breeze" credit is opt-in: off unless a portal turns it on.
+  showPoweredBy: z.boolean().default(false),
 })
 export type FooterBlock = z.infer<typeof footerBlockSchema>
 

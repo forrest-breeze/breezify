@@ -522,7 +522,7 @@ export function PortalThemeControls({
   const swatchValue = /^#[0-9a-fA-F]{6}$/.test(theme.accentColor)
     ? theme.accentColor
     : "#2f5520"
-  const showPoweredBy = layout.footer?.showPoweredBy !== false
+  const showPoweredBy = layout.footer?.showPoweredBy === true
 
   return (
     <div className={cn("flex flex-col gap-6", className)}>
@@ -832,9 +832,9 @@ export function PortalThemeControls({
       {canRemoveBreezifyBranding ? (
         <div className="flex items-start justify-between gap-3 rounded-lg border border-border bg-muted/30 p-3">
           <div className="min-w-0 space-y-1">
-            <Label htmlFor="portal-powered-by">Show Powered by Breezify</Label>
+            <Label htmlFor="portal-powered-by">Show Powered by Breeze</Label>
             <p className="text-[11px] leading-relaxed text-muted-foreground">
-              Controls the Breezify credit in the public portal footer.
+              Shows the Breeze credit in the public portal footer. Off by default.
             </p>
           </div>
           <Switch
@@ -848,7 +848,7 @@ export function PortalThemeControls({
                 setError(err instanceof Error ? err.message : "Operation failed")
               }
             }}
-            aria-label="Show Powered by Breezify"
+            aria-label="Show Powered by Breeze"
           />
         </div>
       ) : null}

@@ -48,6 +48,12 @@ export interface ReadmeExportFolder {
   /** The folder's landing content as Markdown; becomes `index.md`. */
   markdown: string
   link: ReadmeFolderLink | null
+  /**
+   * Overrides the folder's place in its parent's `_order.yaml`: 'omit' leaves
+   * it out (the folder is not public), 'append' lists a folder that has no
+   * position yet at the end. See readmeFolderListing.
+   */
+  listing?: 'omit' | 'append' | null
 }
 
 export interface ReadmeExportDocument {
@@ -414,7 +420,11 @@ export function planReadmeExport(input: {
     const directory = directoryByFolder.get(folder.id)
     // Section roots (reference, recipes, ...) are not listed in any order file.
     if (!directory || !directory.includes('/') || !materialized.has(folder.id)) continue
-    addChild(directoryOf(directory), directory.split('/').at(-1)!, folder.sortOrder)
+    const sortOrder =
+      folder.listing === 'omit'
+        ? null
+        : (folder.sortOrder ?? (folder.listing === 'append' ? Number.MAX_SAFE_INTEGER : null))
+    addChild(directoryOf(directory), directory.split('/').at(-1)!, sortOrder)
   }
   for (const document of documents) {
     const path = pathByDocument.get(document.id)!

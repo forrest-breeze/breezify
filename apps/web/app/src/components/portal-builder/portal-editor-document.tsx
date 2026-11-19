@@ -36,7 +36,7 @@ export function PortalEditorDocument({
           {children}
         </div>
         <PortalFooter
-          footer={layout.footer ?? { id: "footer", type: "footer", showPoweredBy: true }}
+          footer={layout.footer ?? { id: "footer", type: "footer", showPoweredBy: false }}
           allowPoweredByRemoval={allowPoweredByRemoval}
           brandName={layout.theme.brandName}
           brandLogoUrl={layout.theme.logoUrl}

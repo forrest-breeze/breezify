@@ -343,13 +343,41 @@ export function createSupabaseReadmeStore(
       if (error) throw new Error(`readme folder update: ${error.message}`)
     },
 
-    async deleteFolder(id): Promise<void> {
+    async deleteFolderIfEmpty(id): Promise<boolean> {
+      const [live, children] = await Promise.all([
+        admin
+          .from('documents')
+          .select('id')
+          .eq('workspace_id', workspaceId)
+          .eq('folder_id', id)
+          .is('deleted_at', null)
+          .limit(1),
+        admin
+          .from('folders')
+          .select('id')
+          .eq('workspace_id', workspaceId)
+          .eq('parent_folder_id', id)
+          .limit(1),
+      ])
+      if (live.error) throw new Error(`readme folder contents: ${live.error.message}`)
+      if (children.error) throw new Error(`readme folder children: ${children.error.message}`)
+      if ((live.data ?? []).length > 0 || (children.data ?? []).length > 0) return false
+      // Deleting a folder deletes the documents filed in it. What is left here
+      // is in the trash; unfile it so it can still be restored.
+      const { error: unfileError } = await admin
+        .from('documents')
+        .update({ folder_id: null })
+        .eq('workspace_id', workspaceId)
+        .eq('folder_id', id)
+        .not('deleted_at', 'is', null)
+      if (unfileError) throw new Error(`readme folder unfile: ${unfileError.message}`)
       const { error } = await admin
         .from('folders')
         .delete()
         .eq('id', id)
         .eq('workspace_id', workspaceId)
       if (error) throw new Error(`readme folder delete: ${error.message}`)
+      return true
     },
 
     async insertDocument(input): Promise<string> {

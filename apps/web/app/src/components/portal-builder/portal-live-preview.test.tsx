@@ -61,7 +61,7 @@ describe("PortalLivePreview", () => {
     // Mobile reserves 2 × 10px for the phone bezel around the screen.
     ["mobile", 430, 844, 20],
     ["desktop", 1440, 900, 0],
-  ] as const)("keeps the %s viewport fixed when the preview panel resizes", (device, width, height, bezel) => {
+  ] as const)("keeps the %s viewport when the preview panel resizes", (device, width, height, bezel) => {
     const panelWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300)
     const panelHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400)
     try {
@@ -85,6 +85,60 @@ describe("PortalLivePreview", () => {
     } finally {
       panelWidth.mockRestore()
       panelHeight.mockRestore()
+    }
+  })
+
+  it("lays the desktop preview out at the browser window's viewport, like the published portal", () => {
+    const panelWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(960)
+    const panelHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(800)
+    const { innerWidth, innerHeight } = window
+    const resizeWindow = (width: number, height: number): void => {
+      act(() => {
+        Object.assign(window, { innerWidth: width, innerHeight: height })
+        window.dispatchEvent(new Event("resize"))
+      })
+    }
+    try {
+      render(<PortalLivePreview {...baseProps} />)
+      const iframe = screen.getByTitle("Portal preview")
+
+      // A wide window crosses breakpoints a fixed 1440px frame never reached.
+      resizeWindow(1920, 1080)
+      expect(screen.getByTitle("Portal preview")).toBe(iframe)
+      expect(iframe).toHaveStyle({
+        width: "1920px",
+        height: "1080px",
+        transform: "scale(0.5)",
+      })
+      expect(iframe.parentElement).toHaveStyle({ width: "960px", height: "540px" })
+
+      // A small window still previews a standard desktop, not a tablet layout.
+      resizeWindow(1100, 700)
+      expect(iframe).toHaveStyle({ width: "1440px", height: "900px" })
+    } finally {
+      resizeWindow(innerWidth, innerHeight)
+      panelWidth.mockRestore()
+      panelHeight.mockRestore()
+    }
+  })
+
+  it("keeps the mobile viewport fixed whatever the browser window's size", () => {
+    const { innerWidth, innerHeight } = window
+    try {
+      act(() => {
+        Object.assign(window, { innerWidth: 1920, innerHeight: 1080 })
+        window.dispatchEvent(new Event("resize"))
+      })
+      render(<PortalLivePreview {...baseProps} device="mobile" />)
+      expect(screen.getByTitle("Portal preview")).toHaveStyle({
+        width: "430px",
+        height: "844px",
+      })
+    } finally {
+      act(() => {
+        Object.assign(window, { innerWidth, innerHeight })
+        window.dispatchEvent(new Event("resize"))
+      })
     }
   })
 
@@ -220,6 +274,66 @@ describe("PortalLivePreview", () => {
       "src",
       initialSrc ?? "",
     )
+  })
+
+  it("shows a document requested from the editor read-only once the editor closes", () => {
+    const request = { ref: "install", page: null, key: 1 }
+    const editor = <p>Editor</p>
+    const { rerender } = render(
+      <PortalLivePreview {...baseProps} content={editor} />,
+    )
+    expect(screen.queryByTitle("Portal preview")).not.toBeInTheDocument()
+
+    rerender(
+      <PortalLivePreview {...baseProps} content={editor} documentRequest={request} />,
+    )
+    rerender(<PortalLivePreview {...baseProps} documentRequest={request} />)
+
+    const iframe = screen.getByTitle("Portal preview")
+    expect(iframe.getAttribute("src")).toContain("doc=install")
+
+    // Once it has loaded, later reloads return to the page's default doc…
+    fireEvent.load(iframe)
+    rerender(
+      <PortalLivePreview {...baseProps} reloadKey={1} documentRequest={request} />,
+    )
+    expect(screen.getByTitle("Portal preview").getAttribute("src")).not.toContain(
+      "doc=",
+    )
+
+    // …and so does closing a later editor that made no request.
+    rerender(
+      <PortalLivePreview
+        {...baseProps}
+        reloadKey={1}
+        content={editor}
+        documentRequest={request}
+      />,
+    )
+    rerender(
+      <PortalLivePreview {...baseProps} reloadKey={1} documentRequest={request} />,
+    )
+    expect(screen.getByTitle("Portal preview").getAttribute("src")).not.toContain(
+      "doc=",
+    )
+  })
+
+  it("keeps a requested document on its page while the host's page catches up", () => {
+    const request = { ref: "auth", page: "api", key: 1 }
+    const editor = <p>Editor</p>
+    const { rerender } = render(
+      <PortalLivePreview {...baseProps} content={editor} />,
+    )
+    rerender(
+      <PortalLivePreview {...baseProps} content={editor} documentRequest={request} />,
+    )
+    rerender(
+      <PortalLivePreview {...baseProps} pageSlug="api" documentRequest={request} />,
+    )
+
+    const src = screen.getByTitle("Portal preview").getAttribute("src")
+    expect(src).toContain("page=api")
+    expect(src).toContain("doc=auth")
   })
 
   it("reloads the frame when the editor switches page", () => {

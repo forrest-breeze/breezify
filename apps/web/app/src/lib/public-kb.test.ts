@@ -18,6 +18,7 @@ import {
   getPortalWorkspace,
   getPublicDocument,
   getPublicDocumentLinks,
+  getPublicFolderDetail,
   isScopeProvided,
   normalizeScopeKey,
   searchPublic,
@@ -97,6 +98,8 @@ interface PublicDocRow {
   title: string
   source: string | null
   document_type: string
+  /** The `readme_hidden:source_metadata->readme_hidden` select alias. */
+  readme_hidden?: unknown
 }
 
 function publicDocsQuery(rows: PublicDocRow[]) {
@@ -832,6 +835,384 @@ describe("public document producer document_type allowlist", () => {
   })
 })
 
+// A page marked `hidden: true` in its GitHub docs repository is unpublished:
+// every read path must drop it, including the direct link.
+describe("pages hidden in the GitHub docs repository", () => {
+  beforeEach(() => {
+    hoisted.createAdminClient.mockReset()
+  })
+
+  function repositoryPage(hidden: unknown) {
+    return documentsQuery({
+      id: "doc-apple-pay",
+      public_slug: "apple-pay-direct-payment",
+      title: "Apple Pay",
+      content: "body",
+      source: "github",
+      author: null,
+      updated_at: "2026-11-17T00:00:00Z",
+      folder_id: null,
+      deleted_at: null,
+      document_type: "source",
+      source_metadata: { repo_format: "readme", readme_hidden: hidden },
+    })
+  }
+
+  it("404s a hidden page fetched by its direct link", async () => {
+    hoisted.createAdminClient.mockReturnValue({
+      from: vi.fn(() => repositoryPage(true)),
+    })
+
+    await expect(getPublicDocument("ws-1", "apple-pay-direct-payment")).resolves.toBeNull()
+  })
+
+  it("still serves a repository page that is not hidden", async () => {
+    // Unfiled GitHub captures are never navigable, so file this one.
+    const docsQuery = documentsQuery({
+      id: "doc-visible",
+      public_slug: "quick-start",
+      title: "Quick Start",
+      content: "body",
+      source: "github",
+      author: null,
+      updated_at: "2026-11-17T00:00:00Z",
+      folder_id: "folder-guides",
+      deleted_at: null,
+      document_type: "source",
+      source_metadata: { repo_format: "readme", readme_hidden: false },
+    })
+    const folderQuery = query({ data: { visibility: "workspace", kind: "user" }, error: null })
+    hoisted.createAdminClient.mockReturnValue({
+      from: vi.fn((table: string) => (table === "folders" ? folderQuery : docsQuery)),
+    })
+
+    const result = await getPublicDocument("ws-1", "quick-start")
+
+    expect(result?.id).toBe("doc-visible")
+  })
+
+  it("drops hidden pages from search, by body and by title", async () => {
+    const docsQuery = publicDocsQuery([
+      {
+        id: "doc-hidden",
+        public_slug: "payout-overview",
+        title: "Payout overview",
+        source: null,
+        document_type: "source",
+        readme_hidden: true,
+      },
+      {
+        id: "doc-visible",
+        public_slug: "payout-page",
+        title: "Payout page",
+        source: null,
+        document_type: "source",
+        readme_hidden: false,
+      },
+    ])
+    hoisted.createAdminClient.mockReturnValue({
+      rpc: vi.fn(async () => ({
+        data: [
+          { document_id: "doc-hidden", title: "Payout overview", line_text: "payout internals" },
+        ],
+        error: null,
+      })),
+      from: vi.fn((table: string) => {
+        if (table === "folders") return thenableQuery({ data: [], error: null })
+        if (table === "documents") return docsQuery
+        throw new Error(`Unexpected table ${table}`)
+      }),
+    })
+
+    const hits = await searchPublic("ws-1", "payout")
+
+    expect(hits.map((hit) => hit.id)).toEqual(["doc-visible"])
+  })
+
+  it("drops hidden pages from a document's related links", async () => {
+    const linkQueries = [
+      thenableQuery({
+        data: [
+          { target_document_id: "doc-hidden", strength: "related" },
+          { target_document_id: "doc-visible", strength: "related" },
+        ],
+        error: null,
+      }),
+      thenableQuery({ data: [], error: null }),
+    ]
+    const docsQuery = publicDocsQuery([
+      {
+        id: "doc-hidden",
+        public_slug: "payout-overview",
+        title: "Payout overview",
+        source: null,
+        document_type: "source",
+        readme_hidden: true,
+      },
+      {
+        id: "doc-visible",
+        public_slug: "payout-page",
+        title: "Payout page",
+        source: null,
+        document_type: "source",
+      },
+    ])
+    hoisted.createAdminClient.mockReturnValue({
+      from: vi.fn((table: string) => {
+        if (table === "document_links") {
+          return linkQueries.shift() ?? thenableQuery({ data: [], error: null })
+        }
+        if (table === "folders") return thenableQuery({ data: [], error: null })
+        if (table === "documents") return docsQuery
+        throw new Error(`Unexpected table ${table}`)
+      }),
+    })
+
+    const links = await getPublicDocumentLinks("ws-1", "doc-current")
+
+    expect(links.outbound.map((entry) => entry.id)).toEqual(["doc-visible"])
+  })
+
+  describe("folder pages", () => {
+    function orderedQuery(result: { data: unknown; error: unknown }) {
+      const builder = {
+        select: vi.fn(() => builder),
+        eq: vi.fn(() => builder),
+        is: vi.fn(() => builder),
+        in: vi.fn(() => builder),
+        order: vi.fn(() => builder),
+        then: vi.fn(
+          (
+            onfulfilled?: (value: { data: unknown; error: unknown }) => unknown,
+            onrejected?: (reason: unknown) => unknown,
+          ) => Promise.resolve(result).then(onfulfilled, onrejected),
+        ),
+      }
+      return builder
+    }
+
+    function adminForFolder(input: {
+      folderId: string
+      indexHidden: boolean
+      documents: Array<{ id: string; title: string; readme_hidden?: boolean }>
+    }) {
+      const folderQuery = query({
+        data: {
+          id: input.folderId,
+          display_name: "Payouts",
+          name: "payouts",
+          kind: "user",
+          visibility: "workspace",
+          parent_folder_id: null,
+          content: "Landing page body",
+          source_metadata: { index_frontmatter: { hidden: input.indexHidden } },
+        },
+        error: null,
+      })
+      const docsQuery = orderedQuery({
+        data: input.documents.map((doc) => ({
+          ...doc,
+          public_slug: doc.id,
+          source: "github",
+          folder_id: input.folderId,
+        })),
+        error: null,
+      })
+      hoisted.createAdminClient.mockReturnValue({
+        from: vi.fn((table: string) => {
+          if (table === "folders") return folderQuery
+          if (table === "folder_stats") return orderedQuery({ data: [], error: null })
+          if (table === "documents") return docsQuery
+          throw new Error(`Unexpected table ${table}`)
+        }),
+      })
+    }
+
+    it("lists only the pages that are not hidden", async () => {
+      adminForFolder({
+        folderId: "folder-mixed",
+        indexHidden: false,
+        documents: [
+          { id: "doc-hidden", title: "Payout events", readme_hidden: true },
+          { id: "doc-visible", title: "Payout page" },
+        ],
+      })
+
+      const detail = await getPublicFolderDetail("ws-1", "folder-mixed")
+
+      expect(detail?.documents.map((doc) => doc.id)).toEqual(["doc-visible"])
+      expect(detail?.folder.content).toBe("Landing page body")
+    })
+
+    it("withholds a hidden landing page but keeps the folder's visible pages", async () => {
+      adminForFolder({
+        folderId: "folder-hidden-index",
+        indexHidden: true,
+        documents: [{ id: "doc-visible", title: "Sales tax remittance" }],
+      })
+
+      const detail = await getPublicFolderDetail("ws-1", "folder-hidden-index")
+
+      expect(detail?.folder.content).toBeNull()
+      expect(detail?.documents.map((doc) => doc.id)).toEqual(["doc-visible"])
+    })
+
+    it("404s a folder whose landing page and every page are hidden", async () => {
+      adminForFolder({
+        folderId: "folder-all-hidden",
+        indexHidden: true,
+        documents: [{ id: "doc-hidden", title: "Payout events", readme_hidden: true }],
+      })
+
+      await expect(getPublicFolderDetail("ws-1", "folder-all-hidden")).resolves.toBeNull()
+    })
+  })
+})
+
+// Visibility is inherited: a folder that is Public by its own setting is not
+// served while a folder above it is members-only.
+describe("folders beneath a members-only folder", () => {
+  beforeEach(() => {
+    hoisted.createAdminClient.mockReset()
+  })
+
+  const OFFRAMP = "folder-offramp"
+  const NESTED = "folder-offramp-flows"
+  const tree = [
+    { id: "folder-guide", parent_folder_id: null, visibility: "workspace", kind: "user" },
+    { id: "folder-tax", parent_folder_id: "folder-guide", visibility: "workspace", kind: "user" },
+    { id: OFFRAMP, parent_folder_id: "folder-guide", visibility: "role", kind: "user" },
+    { id: NESTED, parent_folder_id: OFFRAMP, visibility: "workspace", kind: "user" },
+  ]
+
+  // `folders` answers the single-row gates (maybeSingle) and the listings the
+  // visibility lookups await, honouring their `visibility` filter.
+  function foldersTable(single: unknown) {
+    let onlyVisibility: string | null = null
+    const builder = {
+      select: vi.fn(() => {
+        onlyVisibility = null
+        return builder
+      }),
+      eq: vi.fn((column: string, value: string) => {
+        if (column === "visibility") onlyVisibility = value
+        return builder
+      }),
+      maybeSingle: vi.fn(async () => ({ data: single, error: null })),
+      then: vi.fn(
+        (
+          onfulfilled?: (value: { data: unknown; error: unknown }) => unknown,
+          onrejected?: (reason: unknown) => unknown,
+        ) =>
+          Promise.resolve({
+            data: tree.filter((row) => !onlyVisibility || row.visibility === onlyVisibility),
+            error: null,
+          }).then(onfulfilled, onrejected),
+      ),
+    }
+    return builder
+  }
+
+  function adminFor(tables: Record<string, unknown>) {
+    const admin = {
+      rpc: vi.fn(async () => ({ data: [], error: null })),
+      from: vi.fn((table: string) => {
+        if (table in tables) return tables[table]
+        throw new Error(`Unexpected table ${table}`)
+      }),
+    }
+    hoisted.createAdminClient.mockReturnValue(admin)
+  }
+
+  function pageIn(folderId: string) {
+    return documentsQuery({
+      id: `doc-in-${folderId}`,
+      public_slug: `page-in-${folderId}`,
+      title: "Customer Offramp Overview",
+      content: "body",
+      source: "github",
+      author: null,
+      updated_at: "2026-11-17T00:00:00Z",
+      folder_id: folderId,
+      deleted_at: null,
+      document_type: "source",
+      source_metadata: { repo_format: "readme", readme_hidden: false },
+    })
+  }
+
+  it("404s a page in a public folder that sits inside a members-only folder", async () => {
+    adminFor({
+      documents: pageIn(NESTED),
+      // The nested folder's own row says it is public.
+      folders: foldersTable({ visibility: "workspace", kind: "user" }),
+    })
+
+    await expect(getPublicDocument("ws-1", `page-in-${NESTED}`)).resolves.toBeNull()
+  })
+
+  it("still serves a page in a folder whose ancestors are all public", async () => {
+    adminFor({
+      documents: pageIn("folder-tax"),
+      folders: foldersTable({ visibility: "workspace", kind: "user" }),
+    })
+
+    const result = await getPublicDocument("ws-1", "page-in-folder-tax")
+
+    expect(result?.id).toBe("doc-in-folder-tax")
+  })
+
+  it("404s the page of a public folder inside a members-only folder", async () => {
+    adminFor({
+      folders: foldersTable({
+        id: NESTED,
+        display_name: "Flows",
+        name: "flows",
+        kind: "user",
+        visibility: "workspace",
+        parent_folder_id: OFFRAMP,
+        content: null,
+        source_metadata: {},
+      }),
+    })
+
+    await expect(getPublicFolderDetail("ws-1", NESTED)).resolves.toBeNull()
+  })
+
+  it("drops pages inside the members-only subtree from search", async () => {
+    const docsQuery = scopedDocsQuery([
+      {
+        id: "doc-offramp",
+        public_slug: "customer-offramp-overview",
+        title: "Customer Offramp Overview",
+        source: "github",
+        document_type: "source",
+        folder_id: OFFRAMP,
+      },
+      {
+        id: "doc-nested",
+        public_slug: "offramp-flows",
+        title: "Offramp flows",
+        source: "github",
+        document_type: "source",
+        folder_id: NESTED,
+      },
+      {
+        id: "doc-tax",
+        public_slug: "sales-tax-remittance",
+        title: "Offramp tax notes",
+        source: "github",
+        document_type: "source",
+        folder_id: "folder-tax",
+      },
+    ])
+    adminFor({ documents: docsQuery, folders: foldersTable(null) })
+
+    const hits = await searchPublic("ws-1", "offramp")
+
+    expect(hits.map((hit) => hit.id)).toEqual(["doc-tax"])
+  })
+})
+
 describe("searchPublic title matching", () => {
   beforeEach(() => {
     hoisted.createAdminClient.mockReset()
@@ -990,8 +1371,8 @@ describe("searchPublic scope", () => {
   function adminForScopedSearch() {
     const foldersQuery = thenableQuery({
       data: [
-        { id: IN_SCOPE, kind: "user", parent_folder_id: null },
-        { id: OUT_OF_SCOPE, kind: "user", parent_folder_id: null },
+        { id: IN_SCOPE, kind: "user", parent_folder_id: null, visibility: "workspace" },
+        { id: OUT_OF_SCOPE, kind: "user", parent_folder_id: null, visibility: "workspace" },
       ],
       error: null,
     })

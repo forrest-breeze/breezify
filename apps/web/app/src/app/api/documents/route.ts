@@ -10,6 +10,11 @@ import { safeJsonBody, slugSchema } from "@/lib/validation";
 import { requireRouteUser } from "@/lib/auth/route-auth";
 import { PUBLIC_KB_CACHE_TAG } from "@/lib/public-kb";
 import { isNavigableDocument } from "@/lib/document-navigation";
+import {
+  REPOSITORY_HIDDEN_SELECT,
+  isRepositoryHiddenDocument,
+} from "@/lib/documents/repository-hidden";
+import { nonPublicFolderIds } from "@/lib/folder-visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -60,7 +65,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   let query = supabase
     .from("documents")
-    .select("id, title, source, status, author, folder_id, document_type, sort_order, created_at, updated_at")
+    .select(
+      `id, title, source, status, author, folder_id, document_type, sort_order, created_at, updated_at, ${REPOSITORY_HIDDEN_SELECT}`,
+    )
     .eq("workspace_id", workspace.workspace_id)
     .is("deleted_at", null);
 
@@ -79,9 +86,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         workspace.workspace_id,
         projectSlug,
       );
+      // Members still see pages the public portal does not serve; they are
+      // flagged below instead of dropped, and row-level access decides which
+      // of them this member gets.
       const ds = await getPublicDocScope(
         workspace.workspace_id,
         project.scope,
+        { includeNonPublic: true },
       );
       permits = (doc) => docScopePermits(ds, doc);
       query = query
@@ -107,14 +118,42 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const rows = (data ?? []) as Array<{
+  const rows = (data ?? []) as unknown as Array<{
     id: string;
     source: string | null;
     folder_id: string | null;
+    readme_hidden?: unknown;
   }>;
   const navigableRows = rows.filter(isNavigableDocument);
+  const listed = permits ? navigableRows.filter((row) => permits(row)) : navigableRows;
+  // Members still see pages the public cannot: pages their repository marks
+  // `hidden`, and everything in a folder that is not public. The flag lets the
+  // tree show that the portal does not serve them. Decoration only, so a failed
+  // folder lookup marks by the page's own flag alone.
+  let nonPublicFolders = new Set<string>();
+  try {
+    const { data: tree, error: treeError } = await supabase
+      .from("folders")
+      .select("id, parent_folder_id, visibility")
+      .eq("workspace_id", workspace.workspace_id);
+    if (treeError) throw new Error(treeError.message);
+    nonPublicFolders = nonPublicFolderIds(
+      (tree ?? []) as Array<{
+        id: string;
+        parent_folder_id: string | null;
+        visibility: string | null;
+      }>,
+    );
+  } catch (err) {
+    console.error("[Breezify] Failed to resolve folders hidden from the public:", err);
+  }
   return NextResponse.json(
-    permits ? navigableRows.filter((row) => permits(row)) : navigableRows,
+    listed.map(({ readme_hidden, ...row }) => ({
+      ...row,
+      hidden_from_public:
+        isRepositoryHiddenDocument({ readme_hidden }) ||
+        (row.folder_id !== null && nonPublicFolders.has(row.folder_id)),
+    })),
   );
 }
 

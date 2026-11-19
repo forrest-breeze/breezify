@@ -38,6 +38,23 @@ function FileRowSkeleton({ width }: { width: string }): React.ReactElement {
   )
 }
 
+// Placeholder for a rail panel (Branding & theme, Header, Footer, Pages, …)
+// while its code chunk loads. Sized like a few labelled fields so the rail
+// doesn't jump when the real controls arrive.
+export function PortalRailPanelSkeleton(): React.ReactElement {
+  return (
+    <div className="space-y-5" aria-busy="true">
+      <span className="sr-only">Loading settings</span>
+      {[0, 1, 2].map((index) => (
+        <div key={index} className="space-y-2">
+          <Skeleton className="h-3.5 w-24" />
+          <Skeleton className="h-9 w-full rounded-md" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function PortalBuilderSkeleton(): React.ReactElement {
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row" aria-busy="true">

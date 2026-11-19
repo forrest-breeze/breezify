@@ -191,18 +191,6 @@ export function PortalHeaderControls({
         />
       </div>
 
-      {header.search.enabled ? (
-        <div className="space-y-1.5">
-          <Label htmlFor="portal-header-search-placeholder">Search placeholder</Label>
-          <Input
-            id="portal-header-search-placeholder"
-            value={header.search.placeholder}
-            maxLength={120}
-            onChange={(event) => patchSearch({ placeholder: event.target.value })}
-          />
-        </div>
-      ) : null}
-
       <div className="space-y-3 border-t border-border pt-5">
         <div>
           <Label>Header item order</Label>

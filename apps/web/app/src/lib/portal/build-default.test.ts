@@ -280,17 +280,17 @@ describe("normalizePortalLayoutForPublicData sidebar enablement", () => {
 })
 
 describe("buildDefaultFooter", () => {
-  it("returns a slim footer (credit only) with no workspace footer", () => {
+  it("returns an empty footer (credit off) with no workspace footer", () => {
     expect(buildDefaultFooter()).toEqual({
       id: "footer",
       type: "footer",
-      showPoweredBy: true,
+      showPoweredBy: false,
     })
     // A workspace without a crawled footer is the same as none.
     expect(buildDefaultFooter(workspace())).toEqual({
       id: "footer",
       type: "footer",
-      showPoweredBy: true,
+      showPoweredBy: false,
     })
   })
 
@@ -309,7 +309,7 @@ describe("buildDefaultFooter", () => {
     expect(footer.columns).toHaveLength(1)
     expect(footer.social).toEqual([{ platform: "github", href: "https://github.com/acme" }])
     expect(footer.note).toBe("© Acme")
-    expect(footer.showPoweredBy).toBe(true)
+    expect(footer.showPoweredBy).toBe(false)
     // The result must be a valid layout footer (it ships inside a PortalLayout).
     const layout = buildDefaultPortalLayout({
       slug: "acme",

@@ -48,10 +48,11 @@ interface PortalFooterProps {
   variant?: "global" | "content"
 }
 
-// Global portal footer. Renders a divider + right-aligned Breezify credit at the
-// bottom of every page as a minimal footer when no links are configured, and
-// extends to a full/rich link footer when configured. Removing the credit is
-// gated by the caller's plan.
+// Global portal footer. Extends to a full/rich link footer when links are
+// configured. The "Powered by Breeze" credit is opt-in (`showPoweredBy`, off by
+// default); with it on and no links, the footer is a divider + right-aligned
+// credit. With neither, nothing renders. A plan without branding removal
+// (`allowPoweredByRemoval` false) always shows the credit.
 export function PortalFooter({
   footer,
   allowPoweredByRemoval = false,
@@ -61,7 +62,7 @@ export function PortalFooter({
   brandAccentColor,
   variant = "global",
 }: PortalFooterProps): React.ReactElement | null {
-  const showPoweredBy = footer.showPoweredBy !== false || !allowPoweredByRemoval
+  const showPoweredBy = footer.showPoweredBy === true || !allowPoweredByRemoval
   const hasLinks = footerHasContent(footer)
 
   if (!hasLinks && !showPoweredBy) return null

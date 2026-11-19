@@ -19,6 +19,7 @@ import type {
 } from "@breezify/core"
 import type { GitHubAvailableRepo } from "@/lib/github/types"
 import type { PortalLayout } from "@/lib/portal/schema"
+import type { PortalPageOutline } from "@/lib/portal/page-outline"
 import type { PortalScopeEntry } from "@/lib/public-kb"
 import type {
   PortalDomainRouteResult,
@@ -139,6 +140,29 @@ export function usePortalProjects(
       revalidateOnFocus: false,
       ...swrConfig,
     },
+  )
+}
+
+export interface PortalPageOutlinesResult {
+  projects: PortalPageOutline[]
+}
+
+/**
+ * Every portal project's Home and pages, for grouping the editor's document
+ * tree by page. Readable by any workspace member. Workspace-scoped key, for the
+ * same reason as usePortalProjects.
+ */
+export function usePortalPageOutlines(
+  config?: SWRConfiguration<PortalPageOutlinesResult> & {
+    workspaceId?: string
+    enabled?: boolean
+  },
+) {
+  const { workspaceId, enabled = true, ...swrConfig } = config ?? {}
+  return useSWR<PortalPageOutlinesResult>(
+    enabled && workspaceId ? (["/api/portal/pages", workspaceId] as const) : null,
+    scopedFetcher,
+    { revalidateOnFocus: true, ...swrConfig },
   )
 }
 
@@ -350,6 +374,8 @@ interface DocumentsResponse {
   document_type?: string
   /** Explicit manual position within its folder (null = no explicit order). */
   sort_order?: number | null
+  /** Hidden in its GitHub docs repository, so the public portal omits it. */
+  hidden_from_public?: boolean
   created_at: string
   updated_at: string
   [key: string]: unknown
@@ -586,6 +612,8 @@ export interface FolderResponse {
   visibility: FolderVisibility
   required_role: WorkspaceMemberRole | null
   document_count: number
+  /** Hidden with all its pages in its GitHub docs repository. */
+  hidden_from_public?: boolean
   sort_order: number | null
   icon: string | null
   last_seen_at: string

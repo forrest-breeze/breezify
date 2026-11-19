@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 import { headers } from "next/headers"
-import { isFolderInScope } from "@/lib/public-kb"
+import { getNonPublicFolderIds, isFolderInScope } from "@/lib/public-kb"
 import { resolvePortalBase } from "@/lib/public-kb-portal-base"
 import { checkPublicRateLimit } from "@/lib/public-kb-ratelimit"
 import { createAdminClient } from "@/lib/supabase/admin"
+import {
+  REPOSITORY_HIDDEN_SELECT,
+  isRepositoryHiddenDocument,
+} from "@/lib/documents/repository-hidden"
 import { logPortalEvent, portalVisitorId } from "@/lib/portal/analytics-capture"
 import { isPortalReportingEnabledForWorkspace } from "@/lib/db/subscription"
 
@@ -111,13 +115,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     const admin = createAdminClient()
     const { data: doc } = await admin
       .from("documents")
-      .select("id, folder_id")
+      .select(`id, folder_id, ${REPOSITORY_HIDDEN_SELECT}`)
       .eq("id", documentId)
       .eq("workspace_id", workspace.id)
       .is("deleted_at", null)
       .in("document_type", ["source", "page"])
       .maybeSingle()
     if (!doc) return noContent()
+    // A page hidden in its repository is not served, so it has no views.
+    if (isRepositoryHiddenDocument(doc as { readme_hidden?: unknown })) return noContent()
+    const docFolderId = (doc as { folder_id: string | null }).folder_id
+    if (docFolderId && (await getNonPublicFolderIds(workspace.id)).has(docFolderId)) {
+      return noContent()
+    }
     // For a scoped project, only count docs inside its folder scope so a forged
     // beacon can't attribute an out-of-scope doc to the project. Mirrors the
     // doc page's isDocInScope gate (workspace-level docs are never in scope).

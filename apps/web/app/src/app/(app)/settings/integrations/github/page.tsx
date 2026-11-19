@@ -1,7 +1,6 @@
 "use client"
 
 import React, { Suspense, useState } from "react"
-import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { AlertTriangle, CheckCircle2, ExternalLink, GitBranch, RefreshCw } from "lucide-react"
 import type { GitHubHostedDocsSourceRow } from "@breezify/core"
@@ -10,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { LoadingBar } from "@/components/ui/loading-bar"
 import { Skeleton } from "@/components/ui/skeleton"
+import { InfoHint } from "@/components/ui/tooltip"
 import {
   Select,
   SelectContent,
@@ -95,39 +95,33 @@ function PublishModeField({
   onChange: (value: PublishMode) => void
   disabled?: boolean
 }): React.JSX.Element {
-  const options: Array<{ value: PublishMode; title: string; description: string }> = [
+  const options: Array<{ value: PublishMode; title: string; description?: string }> = [
     {
       value: "direct",
       title: "Commit directly",
       description:
-        "Publishing commits straight to the synced branch, as ReadMe does. A protected branch must let the Breezify GitHub App bypass its rules.",
+        "A protected branch must let the Breezify GitHub App bypass its rules. Otherwise, open a pull request instead.",
     },
-    {
-      value: "pull_request",
-      title: "Open a pull request",
-      description:
-        "Publishing collects changes on a Breezify branch and opens one pull request. Use this when the branch is protected.",
-    },
+    { value: "pull_request", title: "Open a pull request" },
   ]
   return (
     <div role="radiogroup" aria-label="How Breezify publishes to GitHub" className="space-y-2">
       {options.map((option) => (
         <label
           key={option.value}
-          className="flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 has-[:checked]:border-foreground"
+          className="flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 has-[:checked]:border-foreground"
         >
           <input
             type="radio"
             name="publish-mode"
-            className="mt-1"
             value={option.value}
             checked={value === option.value}
             disabled={disabled}
             onChange={() => onChange(option.value)}
           />
-          <span>
-            <span className="block text-sm font-medium">{option.title}</span>
-            <span className="block text-xs text-muted-foreground">{option.description}</span>
+          <span className="flex items-center gap-1.5 text-sm font-medium">
+            {option.title}
+            {option.description ? <InfoHint>{option.description}</InfoHint> : null}
           </span>
         </label>
       ))}
@@ -211,10 +205,6 @@ function LinkForm({ onLinked }: { onLinked: () => Promise<unknown> }): React.JSX
             placeholder="Default branch"
             className="font-mono text-sm"
           />
-          <p className="text-xs text-muted-foreground">
-            ReadMe keeps one branch per docs version. Leave empty to follow the
-            repository&apos;s default branch.
-          </p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="github-root">Folder</Label>
@@ -225,9 +215,6 @@ function LinkForm({ onLinked }: { onLinked: () => Promise<unknown> }): React.JSX
             placeholder="Repository root"
             className="font-mono text-sm"
           />
-          <p className="text-xs text-muted-foreground">
-            The folder that contains <code>docs/</code> and <code>reference/</code>.
-          </p>
         </div>
       </div>
 
@@ -431,14 +418,8 @@ function LinkedSource({
       ) : null}
       {ignored > 0 ? (
         <p className="text-xs text-muted-foreground">
-          {ignored} file{ignored === 1 ? " is" : "s are"} left as they are in the
-          repository: API reference pages generated from an OpenAPI definition and
-          ReadMe&apos;s own settings pages. The API reference itself is built from
-          the definition under{" "}
-          <Link href="/settings/integrations/openapi" className="underline">
-            OpenAPI
-          </Link>
-          .
+          {ignored} file{ignored === 1 ? "" : "s"} left unchanged in the repository
+          (generated API reference and ReadMe settings pages).
         </p>
       ) : null}
 
@@ -506,7 +487,7 @@ function LinkedSource({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirm === "replace"
-                ? "Every linked page takes the repository's content, title, order and folder. Edits made in Breezify that were not published are replaced; the previous versions stay in each page's history. Pages that exist only in Breezify are kept."
+                ? "Every linked page takes the repository's content, title, order and folder. Edits made in Breezify that were not published are replaced; the previous versions stay in each page's history. Pages that are not in the repository move to the trash, and folders left empty are removed. API reference pages and role-restricted folders are kept."
                 : "Syncing stops. Pages already in the workspace and files already in the repository stay as they are."}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -544,12 +525,6 @@ function GithubIntegrationContent(): React.JSX.Element {
     <div className="space-y-8">
       <header>
         <h2 className="text-base font-semibold">GitHub</h2>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Two-way sync with a GitHub repository in the layout ReadMe&apos;s GitHub
-          integration uses. Pushes to the repository update this workspace;
-          changes made here are published back as commits. A repository that
-          was synced with ReadMe can be linked as it is.
-        </p>
       </header>
 
       {callbackError ? (
@@ -563,10 +538,7 @@ function GithubIntegrationContent(): React.JSX.Element {
       ) : !connected ? (
         <section className="max-w-xl space-y-3">
           <p className="text-sm text-muted-foreground">
-            Install the Breezify GitHub App on the repository that holds the docs.
-            It needs read and write access to <strong>Contents</strong>, and to{" "}
-            <strong>Pull requests</strong> if publishing goes through pull
-            requests.
+            Install the Breezify GitHub App on the docs repository.
           </p>
           {canManage ? (
             <Button onClick={() => initiateGithubInstall()}>Connect GitHub</Button>
@@ -604,36 +576,6 @@ function GithubIntegrationContent(): React.JSX.Element {
           Ask a workspace owner or admin to link a repository.
         </p>
       )}
-
-      <section className="max-w-2xl space-y-3">
-        <h3 className="text-sm font-medium">How the repository maps to the workspace</h3>
-        <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
-          <li>
-            Each folder in <code>docs/</code> is a top-level folder here; pages
-            are Markdown files named after their URL slug, and{" "}
-            <code>_order.yaml</code> sets the sidebar order.
-          </li>
-          <li>
-            A page with child pages is a folder whose <code>index.md</code> is
-            its landing content. <code>hidden: true</code> is an unpublished page.
-          </li>
-          <li>
-            OpenAPI definitions in <code>reference/</code> (JSON or YAML) build
-            the API reference, the same as an upload under{" "}
-            <Link href="/settings/integrations/openapi" className="underline">
-              OpenAPI
-            </Link>
-            . A definition uploaded there is written back to{" "}
-            <code>reference/</code>.
-          </li>
-          <li>
-            A page that nobody edits here is never rewritten in the repository.
-            A page edited here is written back as Markdown with its frontmatter
-            kept; ReadMe components such as callouts and tabs become plain
-            Markdown.
-          </li>
-        </ul>
-      </section>
     </div>
   )
 }

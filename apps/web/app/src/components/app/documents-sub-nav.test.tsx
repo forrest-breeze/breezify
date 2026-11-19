@@ -24,6 +24,7 @@ const hoisted = vi.hoisted(() => ({
   foldersData: undefined as Array<Record<string, unknown>> | undefined,
   documentsLoading: true,
   foldersLoading: true,
+  pageOutlines: { projects: [] } as { projects: Array<Record<string, unknown>> },
 }))
 
 vi.mock("next/navigation", () => ({
@@ -61,6 +62,10 @@ vi.mock("@/hooks/swr", () => ({
   },
   useWorkspace: () => ({
     data: { id: "ws-1" },
+  }),
+  usePortalPageOutlines: (options?: { enabled?: boolean }) => ({
+    data: options?.enabled ? hoisted.pageOutlines : undefined,
+    error: undefined,
   }),
 }))
 
@@ -128,10 +133,12 @@ afterEach(() => {
   hoisted.foldersData = undefined
   hoisted.documentsLoading = true
   hoisted.foldersLoading = true
+  hoisted.pageOutlines = { projects: [] }
+  window.localStorage.clear()
 })
 
 describe("DocumentsSubNav loading state", () => {
-  it("adds a visibility action to a folder row menu", () => {
+  it("picks a folder's visibility in its row menu, without a dialog", () => {
     hoisted.documentsLoading = false
     hoisted.foldersLoading = false
     hoisted.documentsData = []
@@ -159,9 +166,67 @@ describe("DocumentsSubNav loading state", () => {
     expect(hoisted.routerPushMock).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole("button", { name: "Actions for Blog" }))
-    expect(
-      screen.getByRole("button", { name: "Change visibility" }),
-    ).toBeInTheDocument()
+    // Two choices, the current one checked; the role-based options are gone.
+    const choices = screen.getAllByRole("menuitemradio")
+    expect(choices.map((choice) => choice.textContent)).toEqual(["Public", "Members"])
+    expect(screen.getByRole("menuitemradio", { name: "Public" })).toBeChecked()
+    expect(screen.getByRole("menuitemradio", { name: "Members" })).not.toBeChecked()
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  })
+
+  it("grays out folders and pages the public cannot see", () => {
+    hoisted.documentsLoading = false
+    hoisted.foldersLoading = false
+    const stamp = "2026-07-08T00:00:00.000Z"
+    hoisted.foldersData = [
+      {
+        id: "folder-1",
+        name: "offramp",
+        display_name: "Customer Offramp",
+        kind: "user",
+        parent_folder_id: null,
+        visibility: "role",
+        required_role: "agent-only",
+        document_count: 0,
+        hidden_from_public: true,
+        sort_order: null,
+        icon: null,
+        last_seen_at: stamp,
+        created_at: stamp,
+        updated_at: stamp,
+      },
+    ]
+    hoisted.documentsData = [
+      {
+        id: "doc-hidden",
+        title: "Apple Pay",
+        source: "github",
+        folder_id: null,
+        hidden_from_public: true,
+        created_at: stamp,
+        updated_at: stamp,
+      },
+      {
+        id: "doc-public",
+        title: "Quick Start",
+        source: "github",
+        folder_id: null,
+        hidden_from_public: false,
+        created_at: stamp,
+        updated_at: stamp,
+      },
+    ]
+
+    render(<DocumentsSubNav />)
+
+    const hint = "Hidden from the public portal"
+    expect(screen.getByText("Customer Offramp").closest("button")).toHaveAttribute("title", hint)
+    expect(screen.getByText("Apple Pay").closest("button")).toHaveAttribute("title", hint)
+    expect(screen.getByText("Quick Start").closest("button")).not.toHaveAttribute("title")
+
+    // A Members folder shows as Members in its menu.
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Customer Offramp" }))
+    expect(screen.getByRole("menuitemradio", { name: "Members" })).toBeChecked()
   })
 
   it("keeps a document's folder open after clicking away from that document", () => {
@@ -199,6 +264,37 @@ describe("DocumentsSubNav loading state", () => {
     rerender(<DocumentsSubNav />)
     expect(screen.getByText("Payments")).toBeInTheDocument()
     expect(screen.getByText("Refunds")).toBeInTheDocument()
+  })
+
+  it("lets the host show a clicked document instead of opening its editor", () => {
+    hoisted.documentsLoading = false
+    hoisted.foldersLoading = false
+    hoisted.foldersData = []
+    hoisted.documentsData = [
+      { id: "22222222-2222-4222-8222-222222222222", title: "Welcome", source: "Manual", folder_id: null, updated_at: "2026-07-08T00:00:00.000Z" },
+      { id: "33333333-3333-4333-8333-333333333333", title: "Private notes", source: "Manual", folder_id: null, updated_at: "2026-07-08T00:00:00.000Z" },
+    ]
+    const pushState = vi.spyOn(window.history, "pushState")
+    const onOpenDocument = vi.fn(
+      (id: string) => id === "22222222-2222-4222-8222-222222222222",
+    )
+    render(<DocumentsSubNav onOpenDocument={onOpenDocument} />)
+
+    // Handled by the host: no editor.
+    fireEvent.click(screen.getByText("Welcome"))
+    expect(onOpenDocument).toHaveBeenLastCalledWith(
+      "22222222-2222-4222-8222-222222222222",
+    )
+    expect(pushState).not.toHaveBeenCalled()
+    expect(hoisted.routerPushMock).not.toHaveBeenCalled()
+
+    // Declined by the host: the editor opens as usual.
+    fireEvent.click(screen.getByText("Private notes"))
+    expect(pushState).toHaveBeenCalledWith(
+      null,
+      "",
+      "/knowledge/33333333-3333-4333-8333-333333333333",
+    )
   })
 
   it("keeps the knowledge controls outside the scrolling document tree", () => {
@@ -786,5 +882,233 @@ describe("DocumentsSubNav loading state", () => {
       ])
       expect(onFoldersReordered).toHaveBeenCalled()
     })
+  })
+})
+
+describe("DocumentsSubNav editor page roots", () => {
+  const stamp = "2026-07-08T00:00:00.000Z"
+  const folder = (
+    id: string,
+    display_name: string,
+    parent_folder_id: string | null,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    id,
+    name: id,
+    display_name,
+    kind: "user",
+    parent_folder_id,
+    visibility: "workspace",
+    required_role: null,
+    document_count: 0,
+    sort_order: null,
+    icon: null,
+    last_seen_at: stamp,
+    created_at: stamp,
+    updated_at: stamp,
+    ...extra,
+  })
+  const doc = (id: string, title: string, folder_id: string | null) => ({
+    id,
+    title,
+    source: "Manual",
+    folder_id,
+    document_type: "page",
+    created_at: stamp,
+    updated_at: stamp,
+  })
+
+  function seedWorkspace(): void {
+    hoisted.pathname = "/editor"
+    hoisted.documentsLoading = false
+    hoisted.foldersLoading = false
+    hoisted.foldersData = [
+      folder("docs-root", "Breeze Docs", null),
+      folder("guide", "Core Integration Guide", "docs-root"),
+      folder("api-root", "Breeze API Reference", null),
+      folder("payments", "Payments", "api-root"),
+      folder("runbooks", "Runbooks", null, { visibility: "role", required_role: "agent-only" }),
+    ]
+    hoisted.documentsData = [
+      doc("doc-guide", "Quickstart", "guide"),
+      doc("doc-charge", "Create a charge", "payments"),
+      doc("doc-runbook", "Refund runbook", "runbooks"),
+    ]
+    hoisted.pageOutlines = {
+      projects: [
+        {
+          slug: "breeze",
+          displayName: "Breeze",
+          isDefault: true,
+          scope: [{ id: "docs-root", promote: true, rootOnly: true }, "guide"],
+          homePosition: 0,
+          pages: [
+            {
+              id: "page-api",
+              title: "API Reference",
+              slug: "api-reference",
+              scope: ["api-root"],
+              presentation: "api_reference",
+            },
+          ],
+        },
+      ],
+    }
+  }
+
+  function rootRow(title: string): HTMLElement {
+    const row = screen.getByRole("button", { name: title }).parentElement
+    expect(row).not.toBeNull()
+    return row as HTMLElement
+  }
+
+  function rootSection(title: string): HTMLElement {
+    const section = screen
+      .getByRole("button", { name: title })
+      .closest("[data-page-root]")
+    expect(section).not.toBeNull()
+    return section as HTMLElement
+  }
+
+  it("puts each portal page at the top of the editor tree", () => {
+    seedWorkspace()
+    render(<DocumentsSubNav routeRoot="editor" />)
+
+    const roots = Array.from(document.querySelectorAll("[data-page-root]")).map(
+      (element) => element.querySelector("button")?.textContent,
+    )
+    expect(roots).toEqual(["Documents", "API Reference", "Not in portal"])
+
+    // The wrapper folders are the pages themselves, so they are not rows.
+    expect(screen.queryByText("Breeze Docs")).not.toBeInTheDocument()
+    expect(screen.queryByText("Breeze API Reference")).not.toBeInTheDocument()
+    expect(
+      within(rootSection("Documents")).getByText("Core Integration Guide"),
+    ).toBeInTheDocument()
+    expect(within(rootSection("API Reference")).getByText("Payments")).toBeInTheDocument()
+    expect(within(rootSection("Not in portal")).getByText("Runbooks")).toBeInTheDocument()
+  })
+
+  it("keeps the plain folder tree outside the editor", () => {
+    seedWorkspace()
+    hoisted.pathname = "/knowledge"
+    render(<DocumentsSubNav routeRoot="knowledge" />)
+
+    expect(document.querySelector("[data-page-root]")).toBeNull()
+    expect(screen.getByText("Breeze Docs")).toBeInTheDocument()
+  })
+
+  it("keeps the plain folder tree when the portal has no pages of its own", () => {
+    seedWorkspace()
+    hoisted.pageOutlines = {
+      projects: [
+        {
+          slug: "breeze",
+          displayName: "Breeze",
+          isDefault: true,
+          scope: null,
+          homePosition: 0,
+          pages: [],
+        },
+      ],
+    }
+    render(<DocumentsSubNav routeRoot="editor" />)
+
+    expect(document.querySelector("[data-page-root]")).toBeNull()
+    expect(screen.getByText("Breeze API Reference")).toBeInTheDocument()
+  })
+
+  it("opens the tree's first document on bare /editor", async () => {
+    seedWorkspace()
+    window.history.replaceState(null, "", "/editor")
+    const replaceState = vi.spyOn(window.history, "replaceState")
+    try {
+      render(<DocumentsSubNav routeRoot="editor" />)
+
+      // Documents is the first root; its first folder's first document.
+      await waitFor(() => {
+        expect(replaceState).toHaveBeenCalledWith(null, "", "/editor/doc-guide")
+      })
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
+  })
+
+  it("leaves an open document alone", () => {
+    seedWorkspace()
+    hoisted.pathname = "/editor/doc-charge"
+    window.history.replaceState(null, "", "/editor/doc-charge")
+    const replaceState = vi.spyOn(window.history, "replaceState")
+    try {
+      render(<DocumentsSubNav routeRoot="editor" />)
+
+      expect(replaceState).not.toHaveBeenCalled()
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
+  })
+
+  it("collapses a page root and remembers it", () => {
+    seedWorkspace()
+    const { unmount } = render(<DocumentsSubNav routeRoot="editor" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "API Reference" }))
+    expect(screen.queryByText("Payments")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "API Reference" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    )
+    unmount()
+
+    render(<DocumentsSubNav routeRoot="editor" />)
+    expect(screen.queryByText("Payments")).not.toBeInTheDocument()
+    expect(screen.getByText("Core Integration Guide")).toBeInTheDocument()
+  })
+
+  it("moves a folder dropped on a page root into that page's folder", async () => {
+    seedWorkspace()
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    render(<DocumentsSubNav routeRoot="editor" />)
+
+    const runbooks = screen.getByText("Runbooks").closest("[draggable='true']")
+    expect(runbooks).not.toBeNull()
+    const drag = createDataTransfer({})
+    fireEvent.dragStart(runbooks!, drag)
+    const over = dispatchDragEvent(rootRow("API Reference"), "dragover", drag, 0)
+    expect(over.defaultPrevented).toBe(true)
+    expect(drag.dataTransfer.dropEffect).toBe("move")
+
+    dispatchDragEvent(rootRow("API Reference"), "drop", drag, 0)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/folders/runbooks",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ parent_folder_id: "api-root" }),
+        }),
+      )
+    })
+  })
+
+  it("refuses a folder drop on a root with no folder that would show it", () => {
+    seedWorkspace()
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    render(<DocumentsSubNav routeRoot="editor" />)
+
+    // Home's root folder includes only the sections it lists, so a folder moved
+    // into it would not show on the portal.
+    const payments = screen.getByText("Payments").closest("[draggable='true']")
+    const drag = createDataTransfer({})
+    fireEvent.dragStart(payments!, drag)
+    const over = dispatchDragEvent(rootRow("Documents"), "dragover", drag, 0)
+
+    expect(drag.dataTransfer.dropEffect).toBe("none")
+    expect(over.defaultPrevented).toBe(true)
+    dispatchDragEvent(rootRow("Documents"), "drop", drag, 0)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.queryByRole("button", { name: "Add to Not in portal" })).toBeNull()
   })
 })

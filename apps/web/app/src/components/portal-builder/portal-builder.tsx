@@ -74,9 +74,14 @@ import {
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { AppTooltip, InfoHint } from "@/components/ui/tooltip"
-import { PortalBuilderSkeleton } from "./portal-builder-skeleton"
+import {
+  PortalBuilderSkeleton,
+  PortalRailPanelSkeleton,
+} from "./portal-builder-skeleton"
 import { PortalVersionMenu } from "./portal-version-menu"
 import { KnowledgeSubNav } from "@/components/app/knowledge-sub-nav"
+import { GithubBranchPicker } from "@/components/app/github-branch-picker"
+import { WorkspaceGitHubPublish } from "@/components/app/workspace-github-publish"
 import {
   PortalEditorFrameHeader,
   PortalEditorFrameSidebar,
@@ -156,12 +161,14 @@ import {
   validatePortalRouteDomain,
 } from "@/lib/workspace-settings"
 import type {
+  PortalPreviewDocumentRequest,
   PreviewAppearance,
   PreviewDevice,
 } from "./portal-live-preview"
 import { portalDocRefFromHref } from "./portal-live-preview"
 import type { SidebarGroup } from "@/lib/portal/schema"
 import { DocumentSwitchReporterContext } from "@/components/app/document-switch-progress"
+import { isNavigableDocument } from "@/lib/document-navigation"
 import {
   canOpenKnowledgeDocumentInPlace,
   openKnowledgeDocumentInPlace,
@@ -189,52 +196,87 @@ import { PortalLanguageControls } from "./portal-language-controls"
 // The builder contains several mutually-exclusive views and closed-by-default
 // dialogs. Split those client graphs so opening /kb compiles the editor shell,
 // not every customization surface at once.
-const PortalLivePreview = dynamic(() =>
-  import("./portal-live-preview").then((mod) => mod.PortalLivePreview),
+//
+// Every one of these MUST pass `loading`. Without it next/dynamic adds no
+// Suspense boundary of its own, so the first time a chunk is needed (opening
+// Branding & theme, Header, Footer, …) the suspension climbs to the nearest one
+// above the builder: the app route's loading.tsx. That swaps the whole builder
+// (rail + live preview) for the page skeleton until the chunk arrives, which
+// reads as the page reloading. A `loading` fallback keeps the wait local.
+const railPanelLoading = (): React.ReactElement => <PortalRailPanelSkeleton />
+const noFallback = (): null => null
+const PortalLivePreview = dynamic(
+  () =>
+    import("./portal-live-preview").then((mod) => mod.PortalLivePreview),
+  { loading: noFallback },
 )
-const PortalAgentPanel = dynamic(() =>
-  import("./portal-agent-panel").then((mod) => mod.PortalAgentPanel),
+const PortalAgentPanel = dynamic(
+  () =>
+    import("./portal-agent-panel").then((mod) => mod.PortalAgentPanel),
+  { loading: railPanelLoading },
 )
-const PortalThemeControls = dynamic(() =>
-  import("./portal-theme-controls").then((mod) => mod.PortalThemeControls),
+const PortalThemeControls = dynamic(
+  () =>
+    import("./portal-theme-controls").then((mod) => mod.PortalThemeControls),
+  { loading: railPanelLoading },
 )
-const PortalFooterControls = dynamic(() =>
-  import("./portal-footer-controls").then((mod) => mod.PortalFooterControls),
+const PortalFooterControls = dynamic(
+  () =>
+    import("./portal-footer-controls").then((mod) => mod.PortalFooterControls),
+  { loading: railPanelLoading },
 )
-const PortalHeaderControls = dynamic(() =>
-  import("./portal-header-controls").then((mod) => mod.PortalHeaderControls),
+const PortalHeaderControls = dynamic(
+  () =>
+    import("./portal-header-controls").then((mod) => mod.PortalHeaderControls),
+  { loading: railPanelLoading },
 )
-const PublishDialog = dynamic(() =>
-  import("./publish-dialog").then((mod) => mod.PublishDialog),
+const PublishDialog = dynamic(
+  () =>
+    import("./publish-dialog").then((mod) => mod.PublishDialog),
+  { loading: noFallback },
 )
-const PortalVisibilityControls = dynamic(() =>
-  import("./portal-visibility-controls").then(
-    (mod) => mod.PortalVisibilityControls,
-  ),
+const PortalVisibilityControls = dynamic(
+  () =>
+    import("./portal-visibility-controls").then(
+      (mod) => mod.PortalVisibilityControls,
+    ),
+  { loading: railPanelLoading },
 )
-const PortalPagesControls = dynamic(() =>
-  import("./portal-pages-controls").then((mod) => mod.PortalPagesControls),
+const PortalPagesControls = dynamic(
+  () =>
+    import("./portal-pages-controls").then((mod) => mod.PortalPagesControls),
+  { loading: railPanelLoading },
 )
-const DocsPreviewThumb = dynamic(() =>
-  import("./template-preview").then((mod) => mod.DocsPreviewThumb),
+const DocsPreviewThumb = dynamic(
+  () =>
+    import("./template-preview").then((mod) => mod.DocsPreviewThumb),
+  { loading: noFallback },
 )
-const PortalBuildLoader = dynamic(() =>
-  import("./portal-build-loader").then((mod) => mod.PortalBuildLoader),
+const PortalBuildLoader = dynamic(
+  () =>
+    import("./portal-build-loader").then((mod) => mod.PortalBuildLoader),
+  { loading: noFallback },
 )
-const CloudflareWorkerUpdateDialog = dynamic(() =>
-  import("./cloudflare-worker-update-dialog").then(
-    (mod) => mod.CloudflareWorkerUpdateDialog,
-  ),
+const CloudflareWorkerUpdateDialog = dynamic(
+  () =>
+    import("./cloudflare-worker-update-dialog").then(
+      (mod) => mod.CloudflareWorkerUpdateDialog,
+    ),
+  { loading: noFallback },
 )
-const PortalDnsInstructions = dynamic(() =>
-  import("@/components/portal-dns-instructions").then(
-    (mod) => mod.PortalDnsInstructions,
-  ),
+const PortalDnsInstructions = dynamic(
+  () =>
+    import("@/components/portal-dns-instructions").then(
+      (mod) => mod.PortalDnsInstructions,
+    ),
+  { loading: noFallback },
 )
-const PortalReverseProxyInstructions = dynamic(() =>
-  import("@/components/portal-reverse-proxy-instructions").then(
-    (mod) => mod.PortalReverseProxyInstructions,
-  ),
+const PortalReverseProxyInstructions = dynamic(
+  () =>
+    import("@/components/portal-reverse-proxy-instructions").then(
+      (mod) => mod.PortalReverseProxyInstructions,
+    ),
+  { loading: noFallback },
 )
 
 // ---------------------------------------------------------------------------
@@ -2473,6 +2515,10 @@ export function PortalBuilder({
   // Bumped after each successful save/publish to reload the preview iframe (it
   // renders the saved draft server-side, so it refreshes on a changing key).
   const [previewReloadKey, setPreviewReloadKey] = useState(0)
+  // A doc picked in the editor's portal chrome, for the preview to show
+  // read-only once the editor closes (see showPreviewDocument).
+  const [previewDocumentRequest, setPreviewDocumentRequest] =
+    useState<PortalPreviewDocumentRequest | null>(null)
   const savedStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savePromiseRef = useRef<Promise<boolean> | null>(null)
@@ -2501,14 +2547,12 @@ export function PortalBuilder({
     maxWidth: builderRailMaxWidth,
     onWidthChange: setSubSidebarWidth,
   })
-  // Any Knowledge sub-route (document, folder, GitHub changes) replaces the
-  // live preview in the main area.
+  // Any Knowledge sub-route (document, folder) replaces the live preview in
+  // the main area.
   const hasSelectedContent = pathname.startsWith("/knowledge/")
-  // A single document (not a folder or the GitHub changes review) is open.
+  // A single document (not a folder) is open.
   const hasOpenDocument =
-    hasSelectedContent &&
-    !pathname.startsWith("/knowledge/changes") &&
-    !pathname.startsWith("/knowledge/folder/")
+    hasSelectedContent && !pathname.startsWith("/knowledge/folder/")
   // The open document's id, so the frame's nav rail can highlight it.
   const openDocumentId = hasOpenDocument
     ? decodeURIComponent(pathname.slice("/knowledge/".length).split("/")[0] ?? "")
@@ -3104,6 +3148,87 @@ export function PortalBuilder({
     ).catch(() => {})
   }
 
+  // Close any editor and show a doc read-only in the rendered portal.
+  function showPreviewDocument(ref: string, page: string | null): void {
+    setPreviewDocumentRequest((current) => ({
+      ref,
+      page,
+      key: (current?.key ?? 0) + 1,
+    }))
+    void handlePageChange(page)
+  }
+
+  // Whether the rendered portal can show a document on the active page, so
+  // the tree and Cancel never send the frame to a 404. Mirrors the preview
+  // route's checks: a portal document type that isn't hidden from the public
+  // site, outside topic folders, under public folders all the way up, and
+  // inside the active page's scope.
+  function previewCanShowDocument(id: string): boolean {
+    if (!surfaceScopeContext || !rawFolders) return false
+    const document = workspaceDocuments?.find((doc) => doc.id === id)
+    if (!document || document.hidden_from_public) return false
+    if (!surfaceScopeContext.docs.some((doc) => doc.id === id)) return false
+    if (!isNavigableDocument(document)) return false
+    const foldersById = new Map(rawFolders.map((folder) => [folder.id, folder]))
+    let folderId = document.folder_id
+    if (folderId && foldersById.get(folderId)?.kind === "topic") return false
+    for (let depth = 0; folderId; depth += 1) {
+      const folder = foldersById.get(folderId)
+      if (!folder || folder.visibility !== "workspace" || depth > 64) return false
+      folderId = folder.parent_folder_id
+    }
+    return createScopeTreeView(activeSurfaceScope, surfaceScopeContext).docChecked(id)
+  }
+
+  // Navigating keeps the preview's mode: while a document is open in the
+  // editor, the next one opens in the editor too (the tree's default);
+  // otherwise a tree row shows that doc read-only, like a portal link. One the
+  // portal can't show (private, hidden, or outside this page) has no rendered
+  // view, so it opens in the editor either way.
+  function handleTreeOpenDocument(id: string): boolean {
+    if (hasOpenDocument || !previewCanShowDocument(id)) return false
+    showPreviewDocument(id, activePageSlug)
+    return true
+  }
+
+  // Cancel leaves the preview on the document that was open, rendered.
+  function closeEditorToPreview(): void {
+    if (openDocumentId && previewCanShowDocument(openDocumentId)) {
+      showPreviewDocument(openDocumentId, activePageSlug)
+      return
+    }
+    void handlePageChange(activePageSlug)
+  }
+
+  // The page a doc is shown on: the active page when it includes the doc,
+  // otherwise the page (or Home) that does, as when it opens from the tree.
+  // Header links (search hits) can point anywhere in the portal; a doc shown
+  // on a page that doesn't include it would 404 in the frame.
+  async function showPreviewDocumentOnItsPage(ref: string): Promise<void> {
+    const id = await resolvePortalDocumentRef(ref)
+    const document = id
+      ? surfaceScopeContext?.docs.find((doc) => doc.id === id)
+      : undefined
+    let page = activePageSlug
+    if (
+      document &&
+      surfaceScopeContext &&
+      layout &&
+      !createScopeTreeView(activeSurfaceScope, surfaceScopeContext).docChecked(
+        document.id,
+      )
+    ) {
+      const surface = portalSurfaceForDocument(
+        document,
+        currentScope,
+        layout.pages ?? [],
+        surfaceScopeContext,
+      )
+      if (surface !== undefined) page = surface
+    }
+    showPreviewDocument(ref, page)
+  }
+
   async function handleCreateProject(input: {
     slug: string
     name: string
@@ -3468,6 +3593,9 @@ export function PortalBuilder({
       <div className="flex h-full min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-visible">
         <aside className="flex w-full shrink-0 flex-col overflow-hidden border-b border-border bg-background lg:w-80 lg:border-b-0 lg:border-r">
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5 scrollbar-none">
+            <div className="mb-3 flex shrink-0 justify-end empty:hidden">
+              <GithubBranchPicker align="end" />
+            </div>
             <section className="space-y-3 rounded-lg border border-border bg-muted/30 p-4">
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">
@@ -3489,6 +3617,9 @@ export function PortalBuilder({
               </Button>
             </section>
             <KnowledgeSubNav className="mt-6" navProps={{ chrome: "builder" }} />
+          </div>
+          <div className="shrink-0 px-4 pb-4 empty:hidden">
+            <WorkspaceGitHubPublish />
           </div>
         </aside>
         <div className="flex min-h-[calc(100svh-3.5rem)] min-w-0 flex-1 flex-col lg:min-h-0">
@@ -3621,7 +3752,13 @@ export function PortalBuilder({
                   {autosaveStatusNode}
                 </>
               ) : (
-                <div className="min-w-0 flex-1">{switcherNode}</div>
+                <>
+                  <div className="shrink-0">{switcherNode}</div>
+                  {/* Renders nothing unless a docs repository is linked. */}
+                  <div className="flex min-w-0 flex-1 justify-end">
+                    <GithubBranchPicker align="end" />
+                  </div>
+                </>
               )}
               {previewVersion === null && hasPortalChanges ? (
                 <PublishDialog
@@ -3636,6 +3773,7 @@ export function PortalBuilder({
             </div>
 
             {sidebarView === "documentation" ? (
+              <>
               <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5 scrollbar-none">
                 <section className="space-y-4">
                   <SidebarSectionLabel>Manage</SidebarSectionLabel>
@@ -3694,9 +3832,17 @@ export function PortalBuilder({
                       void mutateFolders()
                       setPreviewReloadKey((k) => k + 1)
                     },
+                    onOpenDocument: handleTreeOpenDocument,
                   }}
                 />
               </div>
+              {/* GitHub publishing for the workspace, pinned under the tree.
+                  Empty (and so hidden) unless a linked repository has
+                  something to publish or report. */}
+              <div className="shrink-0 px-4 pb-4 empty:hidden">
+                <WorkspaceGitHubPublish />
+              </div>
+              </>
             ) : (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {actionError ? (
@@ -4032,15 +4178,13 @@ export function PortalBuilder({
 
       <div className="flex min-h-[calc(100svh-3.5rem)] min-w-0 flex-1 flex-col lg:min-h-0">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {/* Documents, folders and GitHub changes open INSIDE the preview
+          {/* Documents and folders open INSIDE the preview
               frame (in place of the rendered portal) rather than replacing
               it, so the toolbar, Publish and device switch never go away. */}
           <PortalLivePreview
               accentColor={layout?.theme.accentColor}
               content={hasOpenDocument ? (
-                <PortalEditorExitProvider
-                  value={() => void handlePageChange(activePageSlug)}
-                >
+                <PortalEditorExitProvider value={closeEditorToPreview}>
                   <PortalEditorDocument
                     layout={layout}
                     appearance={appearance}
@@ -4062,7 +4206,13 @@ export function PortalBuilder({
                     previewSlug={previewSlug}
                     appearance={appearance}
                     onAppearanceChange={setAppearance}
-                    onOpenDocument={(ref) => void handlePreviewOpenDocument(ref)}
+                    // Editing stays editing; from a folder view a doc opens
+                    // read-only, as in the rendered portal.
+                    onOpenDocument={(ref) =>
+                      void (hasOpenDocument
+                        ? handlePreviewOpenDocument(ref)
+                        : showPreviewDocumentOnItsPage(ref))
+                    }
                     onOpenPage={(slug) => void handlePageChange(slug)}
                   />
                 ) : undefined
@@ -4082,6 +4232,7 @@ export function PortalBuilder({
                     }
                     appearance={appearance}
                     activeDocumentId={openDocumentId}
+                    // Shown only while editing, so its links stay in the editor.
                     onHoverDocument={handlePreviewHoverDocument}
                     onOpenDocument={(ref) => void handlePreviewOpenDocument(ref)}
                     onOpenPage={(slug) => void handlePageChange(slug)}
@@ -4108,6 +4259,7 @@ export function PortalBuilder({
               onDeviceChange={setDevice}
               onPageChange={handlePreviewPageChange}
               onOpenDocument={(ref) => void handlePreviewOpenDocument(ref)}
+              documentRequest={previewDocumentRequest}
               actions={
                 <BuilderHeaderActions
                   savedStatusVisible={savedStatusVisible}

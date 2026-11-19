@@ -34,7 +34,10 @@
   }
 }
 
-@custom-variant dark (&:is(.dark *));
+/* `dark:` follows the nearest theme class, so a `.light` subtree inside the
+   dark app shell (the portal editor's inline preview) gets light styles.
+   `:where` keeps the exclusion from raising specificity. */
+@custom-variant dark (&:is(.dark *):not(:where(.dark .light, .dark .light *)));
 
 :root {
   --primary-green: #1f1f1d;
@@ -285,6 +288,17 @@ html:has([data-portal-root])[data-scrolling],
   scrollbar-color: color-mix(in srgb, var(--portal-accent, var(--primary)) 60%, transparent)
     transparent;
 }
+/* The page scrollbar's track is not transparent: where scrollbars take up
+   layout space, a transparent root track shows what is behind the document
+   (the app background, or the builder's preview frame) as a strip down the
+   right edge. PortalScrollbars mirrors the portal's page background here. */
+html:has([data-portal-root]) {
+  scrollbar-color: transparent var(--portal-page-background, transparent);
+}
+html:has([data-portal-root])[data-scrolling] {
+  scrollbar-color: color-mix(in srgb, var(--portal-accent, var(--primary)) 60%, transparent)
+    var(--portal-page-background, transparent);
+}
 html:has([data-portal-root])::-webkit-scrollbar,
 [data-portal-scrollbars]::-webkit-scrollbar,
 [data-portal-scrollbars] ::-webkit-scrollbar,
@@ -300,6 +314,10 @@ html:has([data-portal-root])::-webkit-scrollbar-track,
 html:has([data-portal-root])::-webkit-scrollbar-corner,
 [data-portal-scrollbars] ::-webkit-scrollbar-corner {
   background: transparent;
+}
+/* Same page-background track for engines that only style ::-webkit-scrollbar. */
+html:has([data-portal-root])::-webkit-scrollbar-track {
+  background: var(--portal-page-background, transparent);
 }
 html:has([data-portal-root])::-webkit-scrollbar-thumb,
 [data-portal-scrollbars]::-webkit-scrollbar-thumb,
@@ -1028,12 +1046,14 @@ html:has([data-portal-root])[data-scrolling]::-webkit-scrollbar-thumb,
 
 /* ── Dark mode overrides ── */
 
-.dark .breezify-editor pre {
+/* `:not(:where(.dark .light *))` skips a light preview inside the dark app
+   shell, matching the `dark:` variant above. */
+.dark .breezify-editor pre:not(:where(.dark .light *)) {
   background: oklch(0.12 0 0);
   border-color: oklch(1 0 0 / 8%);
 }
 
-.dark .breezify-editor mark {
+.dark .breezify-editor mark:not(:where(.dark .light *)) {
   background-color: oklch(0.4 0.08 60);
   color: oklch(0.95 0.03 90);
 }

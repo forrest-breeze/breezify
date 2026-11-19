@@ -1,6 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { Monitor, Smartphone } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -29,18 +35,53 @@ import { isPortalPreviewPageMessage } from "@/lib/portal/preview-page-message"
 // Appearance is forwarded to the preview route; device changes the iframe's
 // actual viewport so the production responsive breakpoints—not preview-only
 // conditionals—decide which navigation and layout are visible.
+//
+// The desktop viewport is the editor's own browser window (never smaller than
+// a standard desktop), so the preview lays out exactly like the published
+// portal opened in that window. A fixed 1440px desktop made the two disagree
+// on any larger screen: the wide-screen breakpoints (the search shortcut hint,
+// the article centered between the rails) only showed on the live portal.
 // ---------------------------------------------------------------------------
 
 export type PreviewAppearance = "light" | "dark"
 export type PreviewDevice = "desktop" | "mobile"
 export type PreviewSurface = "default" | "changelog"
 
-const PREVIEW_FRAMES: Record<
-  PreviewDevice,
-  { width: number; height: number }
-> = {
-  desktop: { width: 1440, height: 900 },
-  mobile: { width: 430, height: 844 },
+interface PreviewFrame {
+  width: number
+  height: number
+}
+
+/** Smallest desktop viewport previewed, and the size used before hydration. */
+const MIN_DESKTOP_FRAME: PreviewFrame = { width: 1440, height: 900 }
+const MOBILE_FRAME: PreviewFrame = { width: 430, height: 844 }
+
+function subscribeToWindowResize(onStoreChange: () => void): () => void {
+  window.addEventListener("resize", onStoreChange)
+  return () => window.removeEventListener("resize", onStoreChange)
+}
+
+/**
+ * The viewport the previewed device lays out at. Mobile is a fixed phone;
+ * desktop follows the browser window, so it changes only when the published
+ * portal's own viewport would — never when the preview panel is resized.
+ */
+function usePreviewFrame(device: PreviewDevice): PreviewFrame {
+  const windowWidth = useSyncExternalStore(
+    subscribeToWindowResize,
+    () => window.innerWidth,
+    () => MIN_DESKTOP_FRAME.width,
+  )
+  const windowHeight = useSyncExternalStore(
+    subscribeToWindowResize,
+    () => window.innerHeight,
+    () => MIN_DESKTOP_FRAME.height,
+  )
+  if (device === "mobile") return MOBILE_FRAME
+  return {
+    width: Math.max(MIN_DESKTOP_FRAME.width, windowWidth),
+    height: Math.max(MIN_DESKTOP_FRAME.height, windowHeight),
+  }
 }
 
 /** Bezel thickness (px, unscaled) around the mobile preview screen. */
@@ -89,13 +130,28 @@ interface PortalLivePreviewProps {
   /** Portal nav rail drawn beside `content` inside the frame. */
   contentSidebar?: React.ReactNode
   /**
-   * A document link was clicked inside the rendered portal. `ref` is the
-   * link's last path segment (the doc's public slug, or its id). When set, the
-   * click opens the doc for editing instead of navigating the frame to the
-   * read-only public page.
+   * The rendered portal's "Edit document" control was clicked; `ref` is the
+   * document's id. Ordinary doc links never call this: they move the
+   * read-only preview to that doc instead.
    */
   onOpenDocument?: (ref: string) => void
+  /**
+   * Show a document read-only in the rendered portal. Each new `key` loads it
+   * once (when an editor fills the frame, as soon as the editor closes);
+   * later reloads go back to the page's default document as usual.
+   */
+  documentRequest?: PortalPreviewDocumentRequest | null
   className?: string
+}
+
+/** A one-time request for the rendered portal to show a document. */
+export interface PortalPreviewDocumentRequest {
+  /** The document's public slug or id, as portal doc links carry it. */
+  ref: string
+  /** Page to show it on; null is the portal home. */
+  page: string | null
+  /** New per request, so asking for the same document again still loads it. */
+  key: number
 }
 
 /** The doc ref from a portal doc link (`…/doc/<ref>`), or null. */
@@ -247,12 +303,13 @@ export function PortalLivePreview({
   contentHeader,
   contentSidebar,
   onOpenDocument,
+  documentRequest = null,
   className,
 }: PortalLivePreviewProps): React.ReactElement {
   const editing = content !== undefined && content !== null
   const fitAreaRef = useRef<HTMLDivElement>(null)
   const [fitArea, setFitArea] = useState({ width: 0, height: 0 })
-  const frame = PREVIEW_FRAMES[device]
+  const frame = usePreviewFrame(device)
   const isPhone = device === "mobile"
   // The phone bezel sits outside the scaled screen, so reserve its thickness
   // (both sides) before fitting the viewport into the panel.
@@ -283,27 +340,64 @@ export function PortalLivePreview({
   // that just navigated. `prop` is the last `pageSlug` we reconciled, so a frame
   // report (which lands before the editor's URL catches up) can't be mistaken
   // for an editor request.
+  //
+  // `doc` is a document the host asked the frame to show (`documentRequest`,
+  // whose last adopted key is `docKey`). A request bumps the epoch so the next
+  // src carries it, and the frame's load consumes it: reloads after that go
+  // back to the page's default document, as they always have.
   const [pageNav, setPageNav] = useState<{
     page: string | null
     prop: string | null
     epoch: number
-  }>(() => ({ page: pageSlug, prop: pageSlug, epoch: 0 }))
+    doc: string | null
+    docKey: number | null
+  }>(() => ({
+    page: pageSlug,
+    prop: pageSlug,
+    epoch: 0,
+    doc: null,
+    docKey: documentRequest?.key ?? null,
+  }))
   if (pageNav.prop !== pageSlug) {
     setPageNav((current) =>
       current.prop === pageSlug
         ? current
         : {
+            ...current,
             page: pageSlug,
             prop: pageSlug,
             epoch: current.page === pageSlug ? current.epoch : current.epoch + 1,
+            // A request names its page before the host's URL catches up, so
+            // that page arriving here must not drop the requested document.
+            doc: current.page === pageSlug ? current.doc : null,
           },
     )
   }
-  const buildSrc = (themeMode: PreviewAppearance): string =>
+  const documentRequestKey = documentRequest?.key ?? null
+  if (pageNav.docKey !== documentRequestKey) {
+    setPageNav((current) =>
+      current.docKey === documentRequestKey
+        ? current
+        : documentRequest
+          ? {
+              ...current,
+              page: documentRequest.page,
+              doc: documentRequest.ref,
+              docKey: documentRequest.key,
+              epoch: current.epoch + 1,
+            }
+          : { ...current, docKey: null },
+    )
+  }
+  const buildSrc = (
+    themeMode: PreviewAppearance,
+    doc: string | null = pageNav.doc,
+  ): string =>
     `/portal-preview?theme=${themeMode}` +
     `&slug=${encodeURIComponent(previewSlug)}` +
     `${projectSlug ? `&project=${encodeURIComponent(projectSlug)}` : ""}` +
     `${pageNav.page ? `&page=${encodeURIComponent(pageNav.page)}` : ""}` +
+    `${doc ? `&doc=${encodeURIComponent(doc)}` : ""}` +
     `${version !== null ? `&version=${version}` : ""}` +
     `&v=${reloadKey}`
   const frameKey = `${device}|${reloadKey}|${previewSlug}|${projectSlug ?? ""}|${version ?? ""}|${pageNav.epoch}`
@@ -314,6 +408,14 @@ export function PortalLivePreview({
   const [loadedFrameKey, setLoadedFrameKey] = useState<string | null>(null)
   if (committedFrame.key !== frameKey) {
     setCommittedFrame({ key: frameKey, src: buildSrc(appearance) })
+  }
+  // The iframe unmounts while an editor fills the frame. When the editor
+  // closes, rebuild its src so it reopens on the requested document (or the
+  // page's default) rather than on a document requested earlier.
+  const [frameClosedForEditor, setFrameClosedForEditor] = useState(editing)
+  if (frameClosedForEditor !== editing) {
+    setFrameClosedForEditor(editing)
+    if (!editing) setCommittedFrame({ key: frameKey, src: buildSrc(appearance) })
   }
   // The iframe unmounts while an editor fills the frame; forget its load so
   // the skeleton covers the remount when the editor closes.
@@ -369,6 +471,10 @@ export function PortalLivePreview({
   const handleFrameLoad = useCallback((): void => {
     applyPreviewTheme()
     setLoadedFrameKey(committedFrame.key)
+    // A requested document is on screen now; don't carry it into later loads.
+    setPageNav((current) =>
+      current.doc === null ? current : { ...current, doc: null },
+    )
     // Same-origin: catch doc-link clicks in the rendered portal. Only the
     // explicit "Edit document" control (data-portal-document-ref) opens the
     // editor; ordinary doc links (nav rail, pager, cross-links) just move the
@@ -407,7 +513,7 @@ export function PortalLivePreview({
         event.preventDefault()
         event.stopPropagation()
         frameDocument.defaultView?.location.assign(
-          `${buildSrcRef.current(appearanceRef.current)}&doc=${encodeURIComponent(docRef)}`,
+          buildSrcRef.current(appearanceRef.current, docRef),
         )
       },
       true,
@@ -463,9 +569,9 @@ export function PortalLivePreview({
 
   return (
     <div className={cn("flex h-full flex-col", className)}>
-      {/* Both devices keep a fixed viewport and scale visually to fit the panel.
-          Resizing the panel must never change responsive breakpoints or the
-          amount of content visible within the device viewport.
+      {/* Both devices keep their own viewport and scale visually to fit the
+          panel. Resizing the panel must never change responsive breakpoints or
+          the amount of content visible within the device viewport.
           Controls float over the backdrop — no chrome bar. */}
       {/* pt-14 reserves room for the floating top-right controls (actions +
           orientation, absolute top-0) so the centered preview card never slides

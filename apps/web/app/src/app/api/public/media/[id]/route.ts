@@ -1,8 +1,13 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  REPOSITORY_HIDDEN_SELECT,
+  isRepositoryHiddenDocument,
+} from "@/lib/documents/repository-hidden";
 import { createClient } from "@/lib/supabase/server";
 import { isS3Configured, publicUrlFor, getSignedReadUrl } from "@/lib/storage/s3";
 import {
+  getNonPublicFolderIds,
   isDocInScope,
   type PublicKbScope,
 } from "@/lib/public-kb";
@@ -28,6 +33,7 @@ import { safeRouteParams, uuidParamSchema } from "@/lib/validation";
 interface ReferencingDocument {
   id: string;
   folder_id: string | null;
+  readme_hidden?: unknown;
 }
 
 const PUBLIC_MEDIA_REFERENCE_PAGE_SIZE = 100;
@@ -46,7 +52,7 @@ export async function publiclyReferencesMedia(
   for (let from = 0; ; from += PUBLIC_MEDIA_REFERENCE_PAGE_SIZE) {
     const { data: candidates, error: candidateError } = await admin
       .from("documents")
-      .select("id, folder_id")
+      .select(`id, folder_id, ${REPOSITORY_HIDDEN_SELECT}`)
       .eq("workspace_id", workspaceId)
       .is("deleted_at", null)
       .in("document_type", ["source", "page"])
@@ -73,13 +79,20 @@ export async function publiclyReferencesMedia(
         .neq("kind", "topic")
         .in("id", folderIds);
       if (folderError) return false;
+      // A Public folder inside a folder that is not public is not served.
+      const nonPublic = await getNonPublicFolderIds(workspaceId);
       for (const folder of folders ?? []) {
-        visibleFolderIds.add((folder as { id: string }).id);
+        const id = (folder as { id: string }).id;
+        if (!nonPublic.has(id)) visibleFolderIds.add(id);
       }
     }
 
+    // A page hidden in its repository is not served, so it cannot be what
+    // makes an asset public.
     const visibleDocuments = rows.filter(
-      (row) => row.folder_id === null || visibleFolderIds.has(row.folder_id),
+      (row) =>
+        !isRepositoryHiddenDocument(row) &&
+        (row.folder_id === null || visibleFolderIds.has(row.folder_id)),
     );
     if (visibleDocuments.length > 0) {
       if (legacyWorkspacePublic) return true;

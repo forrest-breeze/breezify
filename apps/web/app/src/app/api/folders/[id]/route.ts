@@ -14,6 +14,7 @@ import type {
   WorkspaceMemberRole,
 } from "@/lib/types";
 import { requireRouteUser } from "@/lib/auth/route-auth";
+import { folderScopeFor } from "@/lib/folder-visibility";
 import { PUBLIC_KB_CACHE_TAG } from "@/lib/public-kb";
 
 const patchBodySchema = z
@@ -126,7 +127,10 @@ export async function GET(
         projectSlug,
       );
       allowedFolderIds = new Set(
-        await getPublicVisibleFolderIds(workspace.workspace_id, project.scope),
+        // Members still open folders the public portal does not serve.
+        await getPublicVisibleFolderIds(workspace.workspace_id, project.scope, {
+          includeNonPublic: true,
+        }),
       );
       if (!allowedFolderIds.has(id)) {
         return NextResponse.json({ error: "Folder not found" }, { status: 404 });
@@ -353,13 +357,8 @@ export async function PATCH(
     updates.parent_folder_id = body.parent_folder_id;
   }
   if (body.visibility !== undefined) {
-    if (body.visibility === "role") {
-      updates.visibility = "role";
-      updates.required_role = body.required_role as WorkspaceMemberRole;
-    } else {
-      updates.visibility = "workspace";
-      updates.required_role = null;
-    }
+    // Public or Members: a higher role named in the request is not stored.
+    Object.assign(updates, folderScopeFor(body.visibility));
   }
   if (body.icon !== undefined) updates.icon = body.icon;
 
@@ -497,7 +496,7 @@ async function renameOrMergeTopic(args: {
 // ---------------------------------------------------------------------------
 // DELETE /api/folders/[id]
 // Deletes a folder and its entire subtree. Documents inside the subtree are
-// moved to trash (soft delete) so they stay restorable. Topic folders keep
+// moved to trash (soft delete) and unfiled so they stay restorable. Topic folders keep
 // their flat unfile-and-delete behavior (topics cannot nest).
 // ---------------------------------------------------------------------------
 
@@ -565,12 +564,13 @@ export async function DELETE(
         );
       }
 
+      // Trashed documents are unfiled too: deleting a folder deletes every
+      // document row still filed in it (documents_folder_id_fkey cascades).
       const { error: unfileError } = await admin
         .from("documents")
         .update({ folder_id: null })
         .eq("workspace_id", workspace.workspace_id)
-        .eq("folder_id", id)
-        .is("deleted_at", null);
+        .eq("folder_id", id);
 
       if (unfileError) {
         console.error("[Breezify] Failed to unfile topic documents:", unfileError.message);
@@ -638,13 +638,14 @@ export async function DELETE(
       depth += 1;
     }
 
-    // Move every document in the subtree to trash (restorable). When the
-    // folder rows go away the documents.folder_id FK nulls out, so a later
-    // restore lands the document at the root level.
+    // Move every document in the subtree to trash (restorable) and unfile it,
+    // so a later restore lands the document at the root level. Unfiling is
+    // what keeps it restorable: deleting a folder deletes every document row
+    // still filed in it (documents_folder_id_fkey cascades), trashed or not.
     const deletedAt = new Date().toISOString();
     const { error: docsError } = await supabase
       .from("documents")
-      .update({ deleted_at: deletedAt, updated_at: deletedAt })
+      .update({ deleted_at: deletedAt, updated_at: deletedAt, folder_id: null })
       .in("folder_id", subtreeIds)
       .eq("workspace_id", workspace.workspace_id)
       .is("deleted_at", null);
@@ -653,6 +654,24 @@ export async function DELETE(
       console.error(
         "[Breezify] Failed to trash documents in folder subtree:",
         docsError.message,
+      );
+      return NextResponse.json(
+        { error: "Failed to delete folder" },
+        { status: 500 },
+      );
+    }
+
+    // What is still filed in the subtree was already in the trash.
+    const { error: unfileError } = await supabase
+      .from("documents")
+      .update({ folder_id: null })
+      .in("folder_id", subtreeIds)
+      .eq("workspace_id", workspace.workspace_id);
+
+    if (unfileError) {
+      console.error(
+        "[Breezify] Failed to unfile trashed documents in folder subtree:",
+        unfileError.message,
       );
       return NextResponse.json(
         { error: "Failed to delete folder" },

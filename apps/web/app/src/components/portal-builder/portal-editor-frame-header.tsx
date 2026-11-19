@@ -21,16 +21,19 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface FrameNavigation {
-  /** Open a document (by public slug or id) in the editor. */
+  /**
+   * A document link (public slug or id) was clicked. The builder keeps the
+   * mode: it opens in the editor while a document is being edited.
+   */
   onOpenDocument: (ref: string) => void
   /** Show a portal page in the live preview; null is the portal home. */
   onOpenPage: (pageSlug: string | null) => void
 }
 
 /**
- * Where a portal URL clicked inside the frame goes: a doc opens in the
- * editor, a page (or home) opens in the preview, and anything off-site opens
- * in a new tab.
+ * Where a portal URL clicked inside the frame goes: a doc goes to the host
+ * (which keeps the editor open while editing), a page (or home) opens in the
+ * preview, and anything off-site opens in a new tab.
  */
 export function navigateFromFrame(
   href: string,

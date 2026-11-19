@@ -6,6 +6,8 @@ import { requireWorkspaceRole } from "@/lib/auth/workspace-role";
 import { safeJsonBody, slugSchema } from "@/lib/validation";
 import type { FolderVisibility, WorkspaceMemberRole } from "@/lib/types";
 import { requireRouteUser } from "@/lib/auth/route-auth";
+import { repositoryHiddenFolderIds } from "@/lib/documents/repository-hidden";
+import { folderScopeFor, nonPublicFolderIds } from "@/lib/folder-visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -98,9 +100,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         workspace.workspace_id,
         projectSlug,
       );
+      // Members still see folders the public portal does not serve; they are
+      // flagged below instead of dropped, and row-level access decides which
+      // of them this member gets.
       const visibleFolderIds = await getPublicVisibleFolderIds(
         workspace.workspace_id,
         project.scope,
+        { includeNonPublic: true },
       );
       if (visibleFolderIds.length === 0) {
         return NextResponse.json([]);
@@ -123,6 +129,35 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       { error: "Failed to fetch folders" },
       { status: 500 },
     );
+  }
+
+  // Folders the public cannot see are still listed for members; the flag lets
+  // the tree show that the portal leaves them out. That is every folder that is
+  // not Public or sits under one, plus a repository directory whose pages are
+  // all hidden. Decoration only, so a failed lookup lists the folders unmarked
+  // rather than failing.
+  let hiddenFromPublic = new Set<string>();
+  try {
+    // Ancestors can lie outside a project-scoped listing, so read the tree.
+    const { data: tree, error: treeError } = await supabase
+      .from("folders")
+      .select("id, parent_folder_id, visibility")
+      .eq("workspace_id", workspace.workspace_id);
+    if (treeError) throw new Error(treeError.message);
+    const treeRows = (tree ?? []) as Array<{
+      id: string;
+      parent_folder_id: string | null;
+      visibility: string | null;
+    }>;
+    hiddenFromPublic = nonPublicFolderIds(treeRows);
+    const fullyHidden = await repositoryHiddenFolderIds(
+      supabase,
+      workspace.workspace_id,
+      treeRows.filter((row) => !hiddenFromPublic.has(row.id)),
+    );
+    for (const id of fullyHidden) hiddenFromPublic.add(id);
+  } catch (err) {
+    console.error("[Breezify] Failed to resolve folders hidden from the public:", err);
   }
 
   // Project folder_id → id for API stability with existing consumers.
@@ -155,6 +190,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       sort_order: typeof r.sort_order === "number" ? r.sort_order : null,
       icon: r.icon ?? null,
       document_count: r.document_count,
+      hidden_from_public: hiddenFromPublic.has(r.folder_id),
       last_seen_at: r.last_seen_at,
       created_at: r.created_at,
       updated_at: r.updated_at,
@@ -194,9 +230,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
 
-  const visibility: FolderVisibility = body.visibility;
-  const requiredRole: WorkspaceMemberRole | null =
-    visibility === "role" ? (body.required_role as WorkspaceMemberRole) : null;
+  // Public or Members: a higher role named in the request is not stored.
+  const { visibility, required_role: requiredRole } = folderScopeFor(body.visibility);
 
   const { data, error } = await supabase
     .from("folders")

@@ -17,6 +17,10 @@ import {
 import { buildDefaultPortalLayout } from "@/lib/portal/build-default"
 import { validatePortalLayout, type PortalLayout } from "@/lib/portal/schema"
 import { PUBLIC_KB_CACHE_TAG } from "@/lib/portal/experiences"
+import {
+  portalPageOutlineFromSpec,
+  type PortalPageOutline,
+} from "@/lib/portal/page-outline"
 import { PORTAL_RESERVED_PROJECT_SLUGS } from "@/lib/portal/portal-path"
 
 // ---------------------------------------------------------------------------
@@ -498,6 +502,59 @@ export async function listPortalProjects(
     if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1
     return a.displayName.localeCompare(b.displayName)
   })
+}
+
+/**
+ * Every portal project's Home and pages, for the editor's document tree, which
+ * groups content by page. Pages come from the project's draft (what the builder
+ * is editing), else its published layout. Read-only, and it carries only
+ * titles, slugs and folder/document ids, so callers may serve it to any
+ * workspace member.
+ */
+export async function listPortalPageOutlines(
+  workspaceId: string,
+): Promise<PortalPageOutline[]> {
+  const admin = createAdminClient()
+  const [projects, { data: rows, error }] = await Promise.all([
+    listPortalProjects(workspaceId),
+    admin
+      .from("workspace_experiences")
+      .select("slug, status, version, spec")
+      .eq("workspace_id", workspaceId)
+      .eq("kind", KB_KIND)
+      .eq("audience", PUBLIC_AUDIENCE)
+      .in("status", ["draft", "published"]),
+  ])
+  if (error) {
+    throw new Error(`portal experiences: page outline lookup failed: ${error.message}`)
+  }
+
+  const layoutBySlug = new Map<string, { draft: boolean; version: number; spec: unknown }>()
+  for (const row of (rows ?? []) as Array<{
+    slug: string | null
+    status: string
+    version: number
+    spec: unknown
+  }>) {
+    if (!row.slug) continue
+    const draft = row.status === "draft"
+    const current = layoutBySlug.get(row.slug)
+    if (
+      !current ||
+      (draft && !current.draft) ||
+      (draft === current.draft && row.version > current.version)
+    ) {
+      layoutBySlug.set(row.slug, { draft, version: row.version, spec: row.spec })
+    }
+  }
+
+  return projects.map((project) => ({
+    slug: project.slug,
+    displayName: project.displayName,
+    isDefault: project.isDefault,
+    scope: project.scope,
+    ...portalPageOutlineFromSpec(layoutBySlug.get(project.slug)?.spec),
+  }))
 }
 
 /**

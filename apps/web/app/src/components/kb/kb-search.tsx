@@ -21,7 +21,7 @@ interface KbSearchBoxProps {
 export function KbSearchBox({
   value,
   onChange,
-  placeholder = "Search the knowledge base…",
+  placeholder = "Search the documentation…",
   autoFocus,
   className,
 }: KbSearchBoxProps): React.ReactElement {
@@ -38,7 +38,7 @@ export function KbSearchBox({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        aria-label="Search the knowledge base"
+        aria-label="Search the documentation"
         className="min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70"
       />
       {value.length > 0 && (

@@ -48,12 +48,6 @@ export const TOUR_STEPS: TourStep[] = [
     path: "/knowledge",
   },
   {
-    target: "changes",
-    title: "Changes",
-    body: "Your edits collect here. Review the diff, then publish when it looks right.",
-    path: "/knowledge",
-  },
-  {
     target: "analytics",
     title: "Analytics",
     body: "See what readers open and search for on the published docs.",

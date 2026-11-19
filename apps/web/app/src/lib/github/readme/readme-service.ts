@@ -13,6 +13,7 @@ import {
   mergeRepositoryPullRequest,
 } from '../github'
 import { GitHubApiError, withGitHubRetry } from '../retry'
+import { reconcileReadmeFolderVisibility } from './readme-folder-visibility'
 import { readmeRootFromPaths } from './readme-layout'
 import {
   commitReadmeSpecFile,
@@ -138,6 +139,13 @@ export async function syncReadmeSource(
       },
       deps,
     )
+    // The sync has just recorded the repository's order files; folders the
+    // repository stopped or started listing take the matching visibility.
+    await reconcileReadmeFolderVisibility(admin, {
+      workspaceId: current.workspace_id,
+      sourceId: current.id,
+      repoId: current.repo_id,
+    })
     await reconcileReadmePublishPullRequest(current, admin)
     return result
   } catch (error) {

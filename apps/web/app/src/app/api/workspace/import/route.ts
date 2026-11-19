@@ -7,6 +7,7 @@ import { getActiveWorkspace } from "@/lib/db/workspace";
 import { parseWorkspaceExport } from "@/lib/workspace-export/format";
 import { safeJsonBody } from "@/lib/validation";
 import { requireRouteUser } from "@/lib/auth/route-auth";
+import { folderScopeFor } from "@/lib/folder-visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -126,8 +127,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         display_name: folder.display_name,
         kind: "user",
         parent_folder_id: null,
-        visibility: folder.visibility,
-        required_role: folder.required_role,
+        // Public or Members: an export from before that change may still name
+        // a higher role, which is no longer assigned.
+        ...folderScopeFor(folder.visibility),
       });
     }
 

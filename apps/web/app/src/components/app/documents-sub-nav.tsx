@@ -5,12 +5,18 @@ import { createPortal } from "react-dom"
 import { useRouter, useParams, usePathname } from "next/navigation"
 import { preload, useSWRConfig } from "swr"
 import { createClient } from "@/lib/supabase/client"
-import { useDocuments, useFolders, useWorkspace } from "@/hooks/swr"
+import {
+  useDocuments,
+  useFolders,
+  usePortalPageOutlines,
+  useWorkspace,
+} from "@/hooks/swr"
 import { useHasHydrated } from "@/hooks/use-has-hydrated"
 import { canPreload, runWhenIdle } from "@/lib/preload"
 import {
   canOpenKnowledgeDocumentInPlace,
   knowledgeDocumentIdFromPath,
+  knowledgeDocumentPath,
   openKnowledgeDocumentInPlace,
 } from "@/lib/knowledge-route"
 
@@ -41,10 +47,16 @@ import {
   setStoredDocumentNavSortMode,
   getStoredOpenFolderIds,
   setStoredOpenFolderIds,
+  getStoredCollapsedPageRoots,
+  setStoredCollapsedPageRoots,
 } from "@/lib/document-nav-preferences"
 import { reorderFolders } from "@/lib/api/folders"
 import { reorderDocuments } from "@/lib/api/documents"
 import { createScopeTreeView } from "@/lib/portal/scope-tree"
+import {
+  buildEditorPageRoots,
+  type EditorPageRoot,
+} from "@/lib/editor-page-roots"
 import type { PortalScopeEntry } from "@/lib/public-kb"
 import { cn } from "@/lib/utils"
 import {
@@ -60,9 +72,14 @@ import {
   Trash2,
   Pencil,
   AlertCircle,
+  Check,
   Shapes,
-  Shield,
   ListFilter,
+  Home,
+  Braces,
+  Newspaper,
+  LayoutTemplate,
+  EyeOff,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -99,7 +116,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { FolderScopePicker, type FolderScope } from "./folder-scope-picker"
+import {
+  FolderScopeIcon,
+  FolderScopePicker,
+  type FolderScope,
+} from "./folder-scope-picker"
+import {
+  FOLDER_SCOPE_CHOICES,
+  PUBLIC_FOLDER_SCOPE,
+  folderScopeKey,
+} from "@/lib/folder-visibility"
 import { FolderIconGrid } from "./folder-icon-picker"
 import {
   isRenderablePortalIconName,
@@ -126,6 +152,8 @@ interface DocItem {
   source: string
   folder_id: string | null
   sort_order: number | null
+  /** Hidden in its GitHub docs repository — the public portal omits it. */
+  hidden_from_public: boolean
   created_at: string
   updated_at: string
 }
@@ -139,12 +167,19 @@ interface FolderItem {
   visibility: FolderVisibility
   required_role: WorkspaceMemberRole | null
   document_count: number
+  /** Hidden with all its pages in its GitHub docs repository. */
+  hidden_from_public: boolean
   sort_order: number | null
   icon: string | null
   last_seen_at: string
   created_at: string
   updated_at: string
 }
+
+// Rows the public portal does not show are grayed out; members can still open
+// and edit them.
+const HIDDEN_FROM_PUBLIC_CLASS = "opacity-50"
+const HIDDEN_FROM_PUBLIC_TITLE = "Hidden from the public portal"
 
 // Explicit folder icon first (the same glyph the portal sidebar renders),
 // generic open/closed folder marks otherwise.
@@ -164,33 +199,6 @@ function FolderRowIcon({
     <FolderOpen className="size-3.5" />
   ) : (
     <Folder className="size-3.5" />
-  )
-}
-
-const ROLE_LABELS: Record<WorkspaceMemberRole, string> = {
-  owner: "Owners",
-  admin: "Admins",
-  editor: "Editors",
-  viewer: "Viewers",
-  "agent-only": "Agents",
-}
-
-function FolderScopeBadge({
-  folder,
-}: {
-  folder: Pick<FolderItem, "visibility" | "required_role">
-}): React.ReactElement | null {
-  if (folder.visibility === "workspace") return null
-
-  const roleLabel = folder.required_role ? ROLE_LABELS[folder.required_role] : "Role"
-  return (
-    <span
-      className="inline-flex items-center gap-1 rounded-sm bg-amber-500/10 px-1 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400"
-      title={`Visible to ${roleLabel}`}
-    >
-      <Shield className="size-2.5" />
-      {roleLabel}
-    </span>
   )
 }
 
@@ -367,6 +375,12 @@ interface DocumentsSubNavProps {
   onRootDocumentCreated?: (documentId: string) => Promise<void> | void
   /** Called after the folder tree order is persisted. */
   onFoldersReordered?: () => void
+  /**
+   * A document row was clicked. Return true when the host showed it some
+   * other way (the portal builder previews it read-only); otherwise the
+   * document opens in its editor as usual.
+   */
+  onOpenDocument?: (id: string) => boolean
 }
 
 function navigationQuery(
@@ -748,7 +762,9 @@ function FileEntry({
             ? "text-foreground"
             : "text-muted-foreground group-hover:text-foreground",
           isSelected && "font-medium",
+          doc.hidden_from_public && HIDDEN_FROM_PUBLIC_CLASS,
         )}
+        title={doc.hidden_from_public ? HIDDEN_FROM_PUBLIC_TITLE : undefined}
       >
         <FileText className="size-3.5 shrink-0" />
         <span className="truncate">{doc.title}</span>
@@ -1049,13 +1065,14 @@ function FolderEntry({
                 isActive
                   ? "text-foreground font-medium"
                   : "text-muted-foreground hover:text-foreground",
+                folder.hidden_from_public && HIDDEN_FROM_PUBLIC_CLASS,
               )}
+              title={folder.hidden_from_public ? HIDDEN_FROM_PUBLIC_TITLE : undefined}
             >
               <FolderRowIcon folder={folder} open={open} />
               <span className="flex-1 truncate">
                 {folder.display_name || folder.name}
               </span>
-              <FolderScopeBadge folder={folder} />
             </button>
           </div>
         )}
@@ -1147,6 +1164,140 @@ function FolderEntry({
   )
 }
 
+function PageRootIcon({ root }: { root: EditorPageRoot }): React.ReactElement {
+  const className = "size-3.5 shrink-0"
+  if (root.kind === "home") return <Home className={className} />
+  if (root.kind === "unplaced") return <EyeOff className={className} />
+  if (root.presentation === "api_reference") return <Braces className={className} />
+  if (root.presentation === "changelog") return <Newspaper className={className} />
+  return <LayoutTemplate className={className} />
+}
+
+/**
+ * A portal page as a root of the editor tree. Display only: the page has no
+ * folder of its own, so a drop or a create goes to the folder that holds the
+ * page's content (see EditorPageRoot), and is refused when there is none.
+ */
+function PageRootEntry({
+  root,
+  open,
+  isEmpty,
+  onToggle,
+  acceptsDrag,
+  onDropItems,
+  onCreateDoc,
+  onCreateFolder,
+  children,
+}: {
+  root: EditorPageRoot
+  open: boolean
+  isEmpty: boolean
+  onToggle: () => void
+  acceptsDrag: (root: EditorPageRoot, types: readonly string[]) => boolean
+  onDropItems: (root: EditorPageRoot, e: React.DragEvent<HTMLElement>) => void
+  onCreateDoc: (root: EditorPageRoot) => void
+  onCreateFolder: (root: EditorPageRoot) => void
+  children: React.ReactNode
+}): React.ReactElement {
+  const [dragOver, setDragOver] = useState(false)
+  const canCreateDoc = root.docTargetFolderId !== undefined
+  const canCreateFolder = root.folderTargetFolderId !== undefined
+
+  return (
+    <div data-page-root={root.key}>
+      <div
+        className={cn(
+          "group flex items-center rounded-md transition-colors",
+          dragOver && "bg-primary/10 ring-1 ring-primary/30",
+        )}
+        onDragOver={(e) => {
+          const types = e.dataTransfer.types
+          const isTreeDrag =
+            types.includes("Files") ||
+            types.includes(DRAG_TYPE) ||
+            types.includes(MULTI_DOC_DRAG_TYPE) ||
+            types.includes(FOLDER_DRAG_TYPE) ||
+            types.includes(MULTI_FOLDER_DRAG_TYPE)
+          if (!isTreeDrag) return
+          e.preventDefault()
+          e.stopPropagation()
+          if (!acceptsDrag(root, types)) {
+            e.dataTransfer.dropEffect = "none"
+            setDragOver(false)
+            return
+          }
+          e.dataTransfer.dropEffect = types.includes("Files") ? "copy" : "move"
+          setDragOver(true)
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setDragOver(false)
+          if (!acceptsDrag(root, e.dataTransfer.types)) return
+          onDropItems(root, e)
+        }}
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pl-1 pr-1 text-left text-[13px] font-medium text-foreground"
+        >
+          <span className="rounded p-0.5 text-muted-foreground/60">
+            <ChevronRight
+              className={cn("size-3 transition-transform", open && "rotate-90")}
+            />
+          </span>
+          <PageRootIcon root={root} />
+          <span className="flex-1 truncate">{root.title}</span>
+        </button>
+        {canCreateDoc || canCreateFolder ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={`Add to ${root.title}`}
+                  className="mr-1 flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[popup-open]:opacity-100"
+                >
+                  <Plus className="size-3.5" />
+                </button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-40">
+              {canCreateDoc ? (
+                <DropdownMenuItem onClick={() => onCreateDoc(root)}>
+                  <FilePlus className="size-3.5" />
+                  New doc
+                </DropdownMenuItem>
+              ) : null}
+              {canCreateFolder ? (
+                <DropdownMenuItem onClick={() => onCreateFolder(root)}>
+                  <FolderPlus className="size-3.5" />
+                  New folder
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </div>
+
+      {open && (
+        <div className="ml-3 border-l border-border/40 pl-1">
+          {isEmpty ? (
+            <p className="px-2 py-1.5 text-[11px] italic text-muted-foreground/50">
+              Empty
+            </p>
+          ) : (
+            children
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function DocumentsSubNav({
   className,
   chrome = "default",
@@ -1163,6 +1314,7 @@ export function DocumentsSubNav({
   onSectionCreated,
   onRootDocumentCreated,
   onFoldersReordered,
+  onOpenDocument,
 }: DocumentsSubNavProps = {}): React.ReactElement {
   const router = useRouter()
   const params = useParams()
@@ -1193,8 +1345,6 @@ export function DocumentsSubNav({
     y: number
   } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
-  // Folder whose role-based visibility is being edited.
-  const [visibilityFolderId, setVisibilityFolderId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renamingType, setRenamingType] = useState<"doc" | "folder" | null>(null)
   const [renameValue, setRenameValue] = useState("")
@@ -1486,6 +1636,7 @@ export function DocumentsSubNav({
     source: d.source,
     folder_id: d.folder_id ?? null,
     sort_order: d.sort_order ?? null,
+    hidden_from_public: d.hidden_from_public === true,
     created_at: d.created_at,
     updated_at: d.updated_at,
   })), [pageDocs])
@@ -1504,6 +1655,7 @@ export function DocumentsSubNav({
       visibility: f.visibility,
       required_role: f.required_role,
       document_count: f.document_count,
+      hidden_from_public: f.hidden_from_public === true,
       sort_order: f.sort_order,
       icon: f.icon ?? null,
       last_seen_at: f.last_seen_at,
@@ -1612,6 +1764,97 @@ export function DocumentsSubNav({
 
   const rootDocs = useMemo(() => docsByFolder.get(null) ?? [], [docsByFolder])
 
+  // Editor: one root per portal page, so each page reads as a root folder (see
+  // lib/editor-page-roots). Builder chrome shows one page at a time instead.
+  // Without portal pages, or if they fail to load, the tree keeps its plain
+  // folder layout.
+  const pageRootsEnabled = routeRoot === "editor" && !useBuilderChrome
+  const { data: pageOutlines, error: pageOutlinesError } = usePortalPageOutlines({
+    workspaceId,
+    enabled: pageRootsEnabled,
+  })
+  const portalScopeContext = useMemo(() => {
+    if (!pageRootsEnabled || !rawFolders || !rawDocs) return null
+    const eligibleFolders = rawFolders.filter(
+      (folder) => folder.kind === "user" && folder.visibility === "workspace",
+    )
+    const eligibleFolderIds = new Set(eligibleFolders.map((folder) => folder.id))
+    return {
+      folders: eligibleFolders.map((folder) => ({
+        id: folder.id,
+        parent_folder_id: folder.parent_folder_id,
+      })),
+      docs: rawDocs
+        .filter(
+          (document) =>
+            (document.document_type == null ||
+              document.document_type === "source" ||
+              document.document_type === "page") &&
+            (document.folder_id == null ||
+              eligibleFolderIds.has(document.folder_id)),
+        )
+        .map((document) => ({
+          id: document.id,
+          folder_id: document.folder_id ?? null,
+        })),
+    }
+  }, [pageRootsEnabled, rawDocs, rawFolders])
+  const pageRootTree = useMemo(
+    () =>
+      pageOutlines && portalScopeContext
+        ? buildEditorPageRoots({
+            projects: pageOutlines.projects,
+            folders: sortedFolders,
+            docs: filteredDocs,
+            scopeContext: portalScopeContext,
+          })
+        : null,
+    [filteredDocs, pageOutlines, portalScopeContext, sortedFolders],
+  )
+  // What the rows render from: the page grouping when there is one.
+  const treeFoldersByParent: Map<string | null, FolderItem[]> =
+    pageRootTree?.foldersByParent ?? foldersByParent
+  const treeDocsByFolder: Map<string | null, DocItem[]> =
+    pageRootTree?.docsByParent ?? docsByFolder
+
+  // Page roots start open; the stored set is the collapsed ones.
+  const [collapsedPageRoots, setCollapsedPageRoots] = useState<Set<string>>(
+    () => new Set(),
+  )
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCollapsedPageRoots(getStoredCollapsedPageRoots())
+  }, [])
+  const setPageRootOpen = useCallback((key: string, open: boolean) => {
+    setCollapsedPageRoots((current) => {
+      if (current.has(key) !== open) return current
+      const next = new Set(current)
+      if (open) next.delete(key)
+      else next.add(key)
+      setStoredCollapsedPageRoots(next)
+      return next
+    })
+  }, [])
+  const handleTogglePageRoot = useCallback(
+    (key: string) => {
+      setPageRootOpen(key, collapsedPageRoots.has(key))
+    },
+    [collapsedPageRoots, setPageRootOpen],
+  )
+  // Opening a document (from search, a link, or another surface) reveals it:
+  // open its page root once, and leave it to the user after that.
+  const selectedPageRootKey = selectedId
+    ? pageRootTree?.rootKeyByItemId.get(selectedId) ?? null
+    : null
+  const revealedSelectionRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedId || !selectedPageRootKey) return
+    const marker = `${selectedId}:${selectedPageRootKey}`
+    if (revealedSelectionRef.current === marker) return
+    revealedSelectionRef.current = marker
+    setPageRootOpen(selectedPageRootKey, true)
+  }, [selectedId, selectedPageRootKey, setPageRootOpen])
+
   // Keep the open document's folders open after you click away from it. A
   // folder renders open while it holds the selected doc; without this it
   // snapped shut as soon as another doc (or folder) was selected. Recording the
@@ -1699,6 +1942,48 @@ export function DocumentsSubNav({
     structuralRootFolderIds,
   ])
 
+  // The first document in the tree's order (each level lists its folders
+  // before its documents), whether or not its folders are expanded.
+  const firstTreeDocId = useMemo(() => {
+    const seen = new Set<string>()
+    const firstUnder = (folderId: string): string | null => {
+      if (seen.has(folderId)) return null
+      seen.add(folderId)
+      for (const child of treeFoldersByParent.get(folderId) ?? []) {
+        const found = firstUnder(child.id)
+        if (found) return found
+      }
+      return treeDocsByFolder.get(folderId)?.[0]?.id ?? null
+    }
+    const firstIn = (
+      levelFolders: readonly FolderItem[],
+      levelDocs: readonly DocItem[],
+    ): string | null => {
+      for (const folder of levelFolders) {
+        const found = firstUnder(folder.id)
+        if (found) return found
+      }
+      return levelDocs[0]?.id ?? null
+    }
+    if (pageRootTree) {
+      for (const root of pageRootTree.roots) {
+        const found = firstIn(
+          pageRootTree.foldersByParent.get(root.key) ?? [],
+          pageRootTree.docsByParent.get(root.key) ?? [],
+        )
+        if (found) return found
+      }
+      return null
+    }
+    return firstIn(visibleRootFolders, visibleRootDocs)
+  }, [
+    pageRootTree,
+    treeDocsByFolder,
+    treeFoldersByParent,
+    visibleRootDocs,
+    visibleRootFolders,
+  ])
+
   const selectedDocIds = useMemo(
     () => new Set([...multiSelectedIds].filter((id) => !knownFolderIds.has(id))),
     [multiSelectedIds, knownFolderIds],
@@ -1711,10 +1996,10 @@ export function DocumentsSubNav({
   const orderedVisibleIds = useMemo(() => {
     const ids: string[] = []
     const visit = (parentId: string | null): void => {
-      const childFolders = foldersByParent.get(parentId) ?? []
+      const childFolders = treeFoldersByParent.get(parentId) ?? []
       for (const f of childFolders) {
         ids.push(f.id)
-        const folderDocs = docsByFolder.get(f.id) ?? []
+        const folderDocs = treeDocsByFolder.get(f.id) ?? []
         const containsSelected = folderDocs.some((d) => d.id === selectedId)
         const open = containsSelected || openFolderIds.has(f.id)
         if (open) {
@@ -1722,6 +2007,14 @@ export function DocumentsSubNav({
           for (const d of folderDocs) ids.push(d.id)
         }
       }
+    }
+    if (pageRootTree) {
+      for (const root of pageRootTree.roots) {
+        if (collapsedPageRoots.has(root.key)) continue
+        visit(root.key)
+        for (const d of pageRootTree.docsByParent.get(root.key) ?? []) ids.push(d.id)
+      }
+      return ids
     }
     for (const folder of visibleRootFolders) {
       ids.push(folder.id)
@@ -1735,10 +2028,13 @@ export function DocumentsSubNav({
     for (const d of visibleRootDocs) ids.push(d.id)
     return ids
   }, [
+    collapsedPageRoots,
     docsByFolder,
-    foldersByParent,
     openFolderIds,
+    pageRootTree,
     selectedId,
+    treeDocsByFolder,
+    treeFoldersByParent,
     visibleRootDocs,
     visibleRootFolders,
   ])
@@ -1847,6 +2143,7 @@ export function DocumentsSubNav({
       setMultiSelectedIds(new Set())
       lastSelectedIdRef.current = id
       focusIdRef.current = id
+      if (onOpenDocument?.(id)) return
       // Inside Knowledge the editor renders from the URL, so opening a
       // document is an instant client-side URL change. Elsewhere (the legacy
       // kb route, or the tree shown outside Knowledge) navigate normally.
@@ -1866,6 +2163,7 @@ export function DocumentsSubNav({
     },
     [
       applyModifierClick,
+      onOpenDocument,
       pathname,
       portalPageSlug,
       routeRoot,
@@ -1885,9 +2183,11 @@ export function DocumentsSubNav({
     [applyModifierClick, handleToggleFolder],
   )
 
-  const visibilityFolder = visibilityFolderId
-    ? (folders.find((folder) => folder.id === visibilityFolderId) ?? null)
-    : null
+  // The folder the row menu is open on; its visibility is picked in that menu.
+  const contextMenuFolder =
+    contextMenu?.type === "folder"
+      ? (folders.find((folder) => folder.id === contextMenu.id) ?? null)
+      : null
 
   const handleMoveFolder = useCallback(
     async (folderIdToMove: string, newParentId: string | null) => {
@@ -2062,10 +2362,11 @@ export function DocumentsSubNav({
       } catch (err) {
         showError(err instanceof Error ? err.message : "Failed to change visibility")
       } finally {
-        await mutateFolders()
+        // Pages inherit the folder's visibility, so their state follows too.
+        await Promise.all([mutateFolders(), mutateDocs()])
       }
     },
-    [mutateFolders, showError],
+    [mutateDocs, mutateFolders, showError],
   )
 
   const handleReorderFolders = useCallback(
@@ -2314,7 +2615,7 @@ export function DocumentsSubNav({
       // Reveal the new nested folder immediately.
       setOpenFolderIds((prev) => new Set(prev).add(parentFolderId))
     }
-    setNewFolderScope({ visibility: "workspace", required_role: null })
+    setNewFolderScope(PUBLIC_FOLDER_SCOPE)
 
     try {
       const res = await fetch("/api/folders", {
@@ -2477,7 +2778,7 @@ export function DocumentsSubNav({
       // Keep the menu on screen: a folder menu can be six rows tall and a
       // right-click near the sidebar's bottom-right corner would otherwise clip.
       const estimatedHeight =
-        menuType === "bulk" ? 48 : menuType === "folder" ? 260 : 96
+        menuType === "bulk" ? 48 : menuType === "folder" ? 340 : 96
       const clampedX = Math.min(x, window.innerWidth - ROW_MENU_WIDTH - 8)
       const clampedY = Math.min(y, window.innerHeight - estimatedHeight - 8)
       if (isInSelection) {
@@ -2500,6 +2801,110 @@ export function DocumentsSubNav({
   // Right-clicking the empty space below the tree opens a root create menu.
   // The knowledge editor allows root docs (New document + New folder); the
   // portal builder is folder-only, so it offers just a new section.
+  // A page root takes a drop only when it has a folder for that kind of item
+  // and the drop would move something.
+  const pageRootAcceptsDrag = useCallback(
+    (root: EditorPageRoot, types: readonly string[]): boolean => {
+      const hasFiles = types.includes("Files")
+      const hasDocs = types.includes(DRAG_TYPE) || types.includes(MULTI_DOC_DRAG_TYPE)
+      const hasFolders =
+        types.includes(FOLDER_DRAG_TYPE) || types.includes(MULTI_FOLDER_DRAG_TYPE)
+      if (hasFiles) return root.docTargetFolderId !== undefined
+      if (!hasDocs && !hasFolders) return false
+      if (hasDocs && root.docTargetFolderId === undefined) return false
+      if (hasFolders && root.folderTargetFolderId === undefined) return false
+      const active = activeInternalDragRef.current
+      if (!active) return true
+      return (
+        movableFolderRootIds(
+          active.folderIds,
+          root.folderTargetFolderId ?? null,
+          rawFolders,
+        ).length > 0 ||
+        movableDocIds(active.docIds, root.docTargetFolderId ?? null, rawDocs)
+          .length > 0
+      )
+    },
+    [rawDocs, rawFolders],
+  )
+
+  const handleDropOnPageRoot = useCallback(
+    async (root: EditorPageRoot, e: React.DragEvent<HTMLElement>) => {
+      activeInternalDragRef.current = null
+      const docTarget = root.docTargetFolderId
+      const folderTarget = root.folderTargetFolderId
+
+      if (e.dataTransfer.files.length > 0) {
+        if (docTarget === undefined) return
+        const files = Array.from(e.dataTransfer.files)
+        const supported = files.filter(
+          (f) =>
+            f.type.startsWith("text/") ||
+            [".md", ".txt", ".ts", ".tsx", ".js", ".jsx", ".json"].some((ext) =>
+              f.name.endsWith(ext),
+            ),
+        )
+        if (supported.length < files.length) {
+          showError(`Skipped ${files.length - supported.length} unsupported file(s)`)
+        }
+        for (const file of supported) {
+          const content = await file.text()
+          void handleCreateDoc(docTarget ?? undefined, file.name, content)
+        }
+        return
+      }
+
+      const multiFolderRaw = e.dataTransfer.getData(MULTI_FOLDER_DRAG_TYPE)
+      const multiDocRaw = e.dataTransfer.getData(MULTI_DOC_DRAG_TYPE)
+      if (multiFolderRaw || multiDocRaw) {
+        if (multiFolderRaw && folderTarget !== undefined) {
+          const ids = parseDragIds(multiFolderRaw)
+          if (ids.length > 0) void handleMoveFolders(ids, folderTarget)
+        }
+        if (multiDocRaw && docTarget !== undefined) {
+          const ids = parseDragIds(multiDocRaw)
+          if (ids.length > 0) void handleMoveDocs(ids, docTarget)
+        }
+        return
+      }
+
+      const folderToMove = e.dataTransfer.getData(FOLDER_DRAG_TYPE)
+      if (folderToMove) {
+        if (folderTarget !== undefined) void handleMoveFolder(folderToMove, folderTarget)
+        return
+      }
+      const docId = e.dataTransfer.getData(DRAG_TYPE)
+      if (docId && docTarget !== undefined) void handleMoveDoc(docId, docTarget)
+    },
+    [
+      handleCreateDoc,
+      handleMoveDoc,
+      handleMoveDocs,
+      handleMoveFolder,
+      handleMoveFolders,
+      showError,
+    ],
+  )
+
+  const handleCreateDocInPageRoot = useCallback(
+    (root: EditorPageRoot) => {
+      if (root.docTargetFolderId === undefined) return
+      setPageRootOpen(root.key, true)
+      void handleCreateDoc(root.docTargetFolderId ?? undefined)
+    },
+    [handleCreateDoc, setPageRootOpen],
+  )
+
+  const handleCreateFolderInPageRoot = useCallback(
+    (root: EditorPageRoot) => {
+      if (root.folderTargetFolderId === undefined) return
+      setPageRootOpen(root.key, true)
+      setNewFolderParentId(root.folderTargetFolderId)
+      setCreatingFolder(true)
+    },
+    [setPageRootOpen],
+  )
+
   const openRootMenu = useCallback((x: number, y: number) => {
     const allowRootDocs = routeRoot !== "kb"
     const estimatedHeight = (allowRootDocs ? 2 : 1) * 36 + 12
@@ -2744,7 +3149,100 @@ export function DocumentsSubNav({
     !workspaceId ||
     loadedWorkspaceId !== workspaceId ||
     (docsLoading && !rawDocs) ||
-    (foldersLoading && !rawFolders)
+    (foldersLoading && !rawFolders) ||
+    (pageRootsEnabled && !pageOutlines && !pageOutlinesError)
+
+  // Editor has no landing page: bare /editor opens the tree's first document
+  // in place once the tree has loaded. Replace rather than push, so Back
+  // leaves the Editor instead of returning to /editor and bouncing forward.
+  useEffect(() => {
+    if (routeRoot !== "editor" || pathname !== "/editor") return
+    if (isLoading || !firstTreeDocId) return
+    if (window.location.pathname !== "/editor") return
+    window.history.replaceState(
+      null,
+      "",
+      knowledgeDocumentPath(firstTreeDocId, "/editor"),
+    )
+  }, [firstTreeDocId, isLoading, pathname, routeRoot])
+
+  // Home's root (the first project's): where the toolbar's New Doc / New
+  // Folder put content when nothing more specific is selected.
+  const homePageRoot = pageRootTree?.roots.find((root) => root.kind === "home")
+
+  // One tree row each; the page-root and plain layouts share them. Children
+  // come from the tree maps, which follow the page grouping when there is one.
+  const renderFolderEntry = (folder: FolderItem): React.ReactElement => (
+    <FolderEntry
+      key={folder.id}
+      folder={folder}
+      docs={treeDocsByFolder.get(folder.id) ?? []}
+      childFolders={treeFoldersByParent.get(folder.id) ?? []}
+      foldersByParent={treeFoldersByParent}
+      docsByFolder={treeDocsByFolder}
+      selectedDocId={selectedId}
+      selectedFolderId={selectedFolderId}
+      selectedDocIds={selectedDocIds}
+      selectedFolderIds={selectedFolderIds}
+      isRenaming={renamingType === "folder" && renamingId === folder.id}
+      renameValue={renameValue}
+      renamingDocId={renamingType === "doc" ? renamingId : null}
+      renamingFolderId={renamingType === "folder" ? renamingId : null}
+      docRenameValue={renameValue}
+      onOpenDoc={handleSelect}
+      onOpenFolder={handleOpenFolder}
+      onCreateDoc={(folderId) => handleCreateDoc(folderId)}
+      onDropDoc={(docId, folderId) => handleMoveDoc(docId, folderId)}
+      onDropDocs={handleMoveDocs}
+      onDropFolder={handleMoveFolder}
+      onDropFolders={handleMoveFolders}
+      reorderEnabled={reorderEnabled}
+      onReorderFolders={handleReorderFolders}
+      onReorderDocs={handleReorderDocs}
+      onFolderMenu={(f, x, y) => openItemMenu("folder", f.id, f.name, x, y)}
+      onDocMenu={(doc, x, y) => openItemMenu("doc", doc.id, doc.title, x, y)}
+      onRenameChange={setRenameValue}
+      onRenameSubmit={handleRenameSubmit}
+      onRenameCancel={handleRenameCancel}
+      onDocRenameChange={setRenameValue}
+      onDocRenameSubmit={handleRenameSubmit}
+      onDocRenameCancel={handleRenameCancel}
+      onError={showError}
+      openFolderIds={openFolderIds}
+      onToggleFolder={handleToggleFolder}
+      onInternalDragStart={handleInternalDragStart}
+      onInternalDragEnd={handleInternalDragEnd}
+    />
+  )
+
+  const renderFileEntry = (doc: DocItem): React.ReactElement => (
+    <FileEntry
+      key={doc.id}
+      doc={doc}
+      isSelected={doc.id === selectedId}
+      isMultiSelected={selectedDocIds.has(doc.id)}
+      isRenaming={renamingType === "doc" && renamingId === doc.id}
+      renameValue={renameValue}
+      selectedDocIds={selectedDocIds}
+      selectedFolderIds={selectedFolderIds}
+      onSelect={handleSelect}
+      onOpenMenu={(x, y) =>
+        openItemMenu("doc", doc.id, doc.title, x, y)
+      }
+      onRenameChange={setRenameValue}
+      onRenameSubmit={handleRenameSubmit}
+      onRenameCancel={handleRenameCancel}
+      reorderEnabled={reorderEnabled}
+      onReorderDocs={(ids, position) =>
+        handleReorderDocs(ids, doc.id, position)
+      }
+      onDropFolders={(ids) =>
+        handleMoveFolders(ids, doc.folder_id ?? rootTargetFolderId)
+      }
+      onInternalDragStart={handleInternalDragStart}
+      onInternalDragEnd={handleInternalDragEnd}
+    />
+  )
 
   return (
     <div
@@ -2877,6 +3375,7 @@ export function DocumentsSubNav({
                 const targetFolderId =
                   selectedFolderId ??
                   docs.find((d) => d.id === selectedId)?.folder_id ??
+                  homePageRoot?.docTargetFolderId ??
                   undefined
                 if (targetFolderId) {
                   setOpenFolderIds((prev) => new Set(prev).add(targetFolderId))
@@ -2892,7 +3391,7 @@ export function DocumentsSubNav({
               variant="ghost"
               size="xs"
               onClick={() => {
-                setNewFolderParentId(null)
+                setNewFolderParentId(homePageRoot?.folderTargetFolderId ?? null)
                 setCreatingFolder(true)
               }}
               className="flex-1 gap-1 text-[11px] text-muted-foreground"
@@ -2905,32 +3404,6 @@ export function DocumentsSubNav({
       )}
 
       {/* Create folder dialog */}
-      <Dialog
-        open={visibilityFolder !== null}
-        onOpenChange={(open) => {
-          if (!open) setVisibilityFolderId(null)
-        }}
-      >
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>
-              {visibilityFolder?.display_name || visibilityFolder?.name || "Folder"}
-            </DialogTitle>
-          </DialogHeader>
-          {visibilityFolder ? (
-            <FolderScopePicker
-              value={{
-                visibility: visibilityFolder.visibility,
-                required_role: visibilityFolder.required_role,
-              }}
-              onChange={(next) =>
-                void handleFolderVisibilityChange(visibilityFolder.id, next)
-              }
-            />
-          ) : null}
-        </DialogContent>
-      </Dialog>
-
       <Dialog
         open={creatingFolder}
         onOpenChange={(open) => {
@@ -3016,6 +3489,31 @@ export function DocumentsSubNav({
       >
         {isLoading ? (
           <DocumentTreeSkeleton />
+        ) : pageRootTree ? (
+          <div className="space-y-1">
+            {pageRootTree.roots.map((root) => {
+              const rootFolders = pageRootTree.foldersByParent.get(root.key) ?? []
+              const rootDocs = pageRootTree.docsByParent.get(root.key) ?? []
+              return (
+                <PageRootEntry
+                  key={root.key}
+                  root={root}
+                  open={!collapsedPageRoots.has(root.key)}
+                  isEmpty={rootFolders.length === 0 && rootDocs.length === 0}
+                  onToggle={() => handleTogglePageRoot(root.key)}
+                  acceptsDrag={pageRootAcceptsDrag}
+                  onDropItems={(target, e) => void handleDropOnPageRoot(target, e)}
+                  onCreateDoc={handleCreateDocInPageRoot}
+                  onCreateFolder={handleCreateFolderInPageRoot}
+                >
+                  {rootFolders.map(renderFolderEntry)}
+                  {rootDocs.length > 0 ? (
+                    <div className="space-y-0.5">{rootDocs.map(renderFileEntry)}</div>
+                  ) : null}
+                </PageRootEntry>
+              )
+            })}
+          </div>
         ) : filteredDocs.length === 0 && visibleRootFolders.length === 0 ? (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
             {query
@@ -3027,48 +3525,7 @@ export function DocumentsSubNav({
         ) : (
           <div className="space-y-1">
           {/* User folders (nested tree) */}
-          {visibleRootFolders.map((folder) => (
-            <FolderEntry
-              key={folder.id}
-              folder={folder}
-              docs={docsByFolder.get(folder.id) ?? []}
-              childFolders={foldersByParent.get(folder.id) ?? []}
-              foldersByParent={foldersByParent}
-              docsByFolder={docsByFolder}
-              selectedDocId={selectedId}
-              selectedFolderId={selectedFolderId}
-              selectedDocIds={selectedDocIds}
-              selectedFolderIds={selectedFolderIds}
-              isRenaming={renamingType === "folder" && renamingId === folder.id}
-              renameValue={renameValue}
-              renamingDocId={renamingType === "doc" ? renamingId : null}
-              renamingFolderId={renamingType === "folder" ? renamingId : null}
-              docRenameValue={renameValue}
-              onOpenDoc={handleSelect}
-              onOpenFolder={handleOpenFolder}
-              onCreateDoc={(folderId) => handleCreateDoc(folderId)}
-              onDropDoc={(docId, folderId) => handleMoveDoc(docId, folderId)}
-              onDropDocs={handleMoveDocs}
-              onDropFolder={handleMoveFolder}
-              onDropFolders={handleMoveFolders}
-              reorderEnabled={reorderEnabled}
-              onReorderFolders={handleReorderFolders}
-              onReorderDocs={handleReorderDocs}
-              onFolderMenu={(f, x, y) => openItemMenu("folder", f.id, f.name, x, y)}
-              onDocMenu={(doc, x, y) => openItemMenu("doc", doc.id, doc.title, x, y)}
-              onRenameChange={setRenameValue}
-              onRenameSubmit={handleRenameSubmit}
-              onRenameCancel={handleRenameCancel}
-              onDocRenameChange={setRenameValue}
-              onDocRenameSubmit={handleRenameSubmit}
-              onDocRenameCancel={handleRenameCancel}
-              onError={showError}
-              openFolderIds={openFolderIds}
-              onToggleFolder={handleToggleFolder}
-              onInternalDragStart={handleInternalDragStart}
-              onInternalDragEnd={handleInternalDragEnd}
-            />
-          ))}
+          {visibleRootFolders.map(renderFolderEntry)}
 
           {/* Documents owned by the visible project root — also a drop target. */}
           <div
@@ -3199,34 +3656,7 @@ export function DocumentsSubNav({
             )}
             {visibleRootDocs.length > 0 && (
               <div className="space-y-0.5">
-                {visibleRootDocs.map((doc) => (
-                  <FileEntry
-                    key={doc.id}
-                    doc={doc}
-                    isSelected={doc.id === selectedId}
-                    isMultiSelected={selectedDocIds.has(doc.id)}
-                    isRenaming={renamingType === "doc" && renamingId === doc.id}
-                    renameValue={renameValue}
-                    selectedDocIds={selectedDocIds}
-                    selectedFolderIds={selectedFolderIds}
-                    onSelect={handleSelect}
-                    onOpenMenu={(x, y) =>
-                      openItemMenu("doc", doc.id, doc.title, x, y)
-                    }
-                    onRenameChange={setRenameValue}
-                    onRenameSubmit={handleRenameSubmit}
-                    onRenameCancel={handleRenameCancel}
-                    reorderEnabled={reorderEnabled}
-                    onReorderDocs={(ids, position) =>
-                      handleReorderDocs(ids, doc.id, position)
-                    }
-                    onDropFolders={(ids) =>
-                      handleMoveFolders(ids, doc.folder_id ?? rootTargetFolderId)
-                    }
-                    onInternalDragStart={handleInternalDragStart}
-                    onInternalDragEnd={handleInternalDragEnd}
-                  />
-                ))}
+                {visibleRootDocs.map(renderFileEntry)}
               </div>
             )}
             {visibleRootDocs.length === 0 && folders.length > 0 && (
@@ -3335,17 +3765,39 @@ export function DocumentsSubNav({
                     Change icon
                   </button>
                 )}
-                {contextMenu.type === "folder" && (
-                  <button
-                    onClick={() => {
-                      setContextMenu(null)
-                      setVisibilityFolderId(contextMenu.id)
-                    }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground"
-                  >
-                    <Shield className="size-3.5" />
-                    Change visibility
-                  </button>
+                {contextMenuFolder && (
+                  <div role="group" aria-label="Visibility">
+                    <div className="my-1 h-px bg-border" />
+                    <p className="px-2 pb-0.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Visibility
+                    </p>
+                    {FOLDER_SCOPE_CHOICES.map((choice) => {
+                      const selected = choice.key === folderScopeKey(contextMenuFolder)
+                      return (
+                        <button
+                          key={choice.key}
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          title={choice.hint}
+                          onClick={() => {
+                            setContextMenu(null)
+                            if (!selected) {
+                              void handleFolderVisibilityChange(
+                                contextMenuFolder.id,
+                                choice.scope,
+                              )
+                            }
+                          }}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground"
+                        >
+                          <FolderScopeIcon scopeKey={choice.key} className="size-3.5" />
+                          {choice.label}
+                          {selected && <Check className="ml-auto size-3.5" />}
+                        </button>
+                      )
+                    })}
+                    <div className="my-1 h-px bg-border" />
+                  </div>
                 )}
                 <button
                   onClick={() => {

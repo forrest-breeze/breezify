@@ -23,6 +23,7 @@ import {
   type ReadmeExportPlan,
   type ReadmeExportSpec,
 } from './readme-export'
+import { readmeFolderListing } from './readme-folder-visibility'
 import {
   isApiReferencePage,
   readmeFolderMetadata,
@@ -145,6 +146,9 @@ export async function loadReadmeExportInput(
   // API reference pages are generated from a definition; the definition is
   // what goes to GitHub, the same way the sync leaves reference stubs alone.
   const mirrored = documents.filter((document) => !isApiReferencePage(document.metadata))
+  const restrictedIds = new Set(
+    folders.filter((folder) => folder.restricted).map((folder) => folder.id),
+  )
   return {
     storeDocuments: documents,
     folders: exported.map((folder) => ({
@@ -154,6 +158,14 @@ export async function loadReadmeExportInput(
       sortOrder: folder.sortOrder,
       markdown: toMarkdown(folder.content),
       link: readReadmeFolderLink(folder.metadata, repoId),
+      // A folder that is not public is left out of the order file, which is
+      // what keeps a directory off the site built from the repository.
+      listing: readmeFolderListing({
+        restricted: folder.restricted,
+        parentRestricted: folder.parentId !== null && restrictedIds.has(folder.parentId),
+        sortOrder: folder.sortOrder,
+        metadata: folder.metadata,
+      }),
     })),
     documents: mirrored.map((document) => {
       const metadata = document.metadata

@@ -300,7 +300,7 @@ export default function WorkspacePage() {
                 src={displayIconUrl}
                 alt="Workspace icon"
                 size={64}
-                className="rounded-lg object-cover"
+                className="rounded-lg object-contain"
               />
             ) : (
               <div className="flex size-16 items-center justify-center rounded-lg bg-muted text-muted-foreground">

@@ -14,7 +14,10 @@ import {
   useGithubHostedDocsPublishStatus,
   useWorkspace,
 } from "@/hooks/swr"
-import { saveActiveDocumentBeforeWorkspacePublish } from "@/lib/workspace-publish-events"
+import {
+  saveActiveDocumentBeforeWorkspacePublish,
+  subscribeToWorkspaceDocumentSaves,
+} from "@/lib/workspace-publish-events"
 import { useGithubAutoPublish } from "@/hooks/use-github-auto-publish"
 import { getGithubPublishingSettings } from "@/lib/github/docs-automation-settings"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -61,8 +64,17 @@ async function responseFailure(
   }
 }
 
-/** Workspace-scoped GitHub publishing control for the Knowledge sidebar. */
-export function WorkspaceGitHubPublish(): React.ReactElement | null {
+/**
+ * Workspace-scoped GitHub publishing control, pinned to the bottom of the
+ * Knowledge sidebar. Renders nothing unless a repository is linked and there
+ * is something to show (changes to publish, an open pull request, a sync or
+ * setup state).
+ */
+export function WorkspaceGitHubPublish({
+  className,
+}: {
+  className?: string
+} = {}): React.ReactElement | null {
   const { data: workspace } = useWorkspace()
   const { data, isLoading, mutate } = useGithubHostedDocs()
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -139,6 +151,15 @@ export function WorkspaceGitHubPublish(): React.ReactElement | null {
       publishStatus?.comparison_key ?? publishStatus?.compared_commit_sha ?? "",
     onPublished: () => Promise.all([mutate(), mutatePublishStatus()]),
   })
+
+  // A saved edit can change what there is to publish, so re-check as soon as
+  // one lands instead of waiting for the next focus or poll.
+  useEffect(() => {
+    if (!canPublish || !sourceReady) return
+    return subscribeToWorkspaceDocumentSaves(() => {
+      void mutatePublishStatus()
+    })
+  }, [canPublish, mutatePublishStatus, sourceReady])
 
   useEffect(() => {
     if (publishStatus?.status !== "sync_required") return
@@ -247,7 +268,7 @@ export function WorkspaceGitHubPublish(): React.ReactElement | null {
   if (exactStatusUpToDate && !upToDateVisible && !pullRequest) return null
 
   return (
-    <div className="shrink-0 space-y-1 border-t border-border pt-3">
+    <div className={cn("shrink-0 space-y-1 border-t border-border pt-3", className)}>
       {activationPullRequest ? (
         <a
           href={activationPullRequest.url}

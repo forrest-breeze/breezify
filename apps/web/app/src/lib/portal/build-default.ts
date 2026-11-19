@@ -55,11 +55,6 @@ const DEFAULT_HERO_HEADING = "How can we help 👋"
 const DEFAULT_HERO_SUBTITLE =
   "We're here to help! Browse our help center for answers to your questions."
 const OLD_DEFAULT_HERO_HEADINGS = new Set(["How can we help?", "How can we help 👋"])
-const OLD_DEFAULT_SEARCH_PLACEHOLDERS = new Set([
-  "Search or ask AI",
-  "Ask, search, or explain…",
-  "Ask, search, or explain...",
-])
 
 /**
  * Header nav links + CTA derived from the workspace's own landing page, when one
@@ -154,7 +149,7 @@ export function buildDefaultFooter(workspace?: PublicWorkspace): FooterBlock {
   return {
     id: "footer",
     type: "footer",
-    showPoweredBy: true,
+    showPoweredBy: false,
     ...(stored?.columns?.length ? { columns: stored.columns } : {}),
     ...(stored?.social?.length ? { social: stored.social } : {}),
     ...(stored?.note ? { note: stored.note } : {}),
@@ -186,7 +181,7 @@ export function withWorkspaceFooterFallback(
     : {
         id: "footer",
         type: "footer" as const,
-        showPoweredBy: true,
+        showPoweredBy: false,
       }
 
   return {
@@ -592,10 +587,6 @@ function isGeneratedDefaultHero(block: PortalBlock, brandName: string): boolean 
   )
 }
 
-function isOldDefaultSearchPlaceholder(value: string): boolean {
-  return OLD_DEFAULT_SEARCH_PLACEHOLDERS.has(value)
-}
-
 function isDefaultAllDocumentsList(block: Extract<PortalBlock, { type: "article-list" }>): boolean {
   return (
     block.id === "trending" ||
@@ -969,15 +960,6 @@ export function normalizePortalLayoutForPublicData(input: {
       ...layout.chrome,
       headerMode: layout.chrome?.headerMode ?? forcedChromeMode ?? "custom",
       footerMode,
-    },
-    header: {
-      ...layout.header,
-      search: {
-        ...layout.header.search,
-        placeholder: isOldDefaultSearchPlaceholder(layout.header.search.placeholder)
-          ? "Search or ask AI"
-          : layout.header.search.placeholder,
-      },
     },
     sidebar:
       sidebarGroups.length > 0

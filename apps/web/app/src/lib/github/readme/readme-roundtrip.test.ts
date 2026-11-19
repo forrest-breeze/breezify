@@ -379,8 +379,9 @@ describe('ReadMe-format GitHub sync: linking a workspace that already has pages'
     expect(adopted.publicSlug).toBe('webhooks')
     expect(adopted.folderId).toBe(store.folder('docs/guides').id)
     expect(adopted.metadata?.github_hosted_conflict).toBe(false)
-    // Nothing to send back: the workspace and the repository agree, and the
-    // folder the page left has nothing in it to write.
+    // The folder the page left is gone with it, and there is nothing to send
+    // back: the workspace and the repository agree.
+    expect(store.folders.has(old.id)).toBe(false)
     expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0, conflictCount: 0 })
   })
 
@@ -496,6 +497,96 @@ describe('ReadMe-format GitHub sync: linking a workspace that already has pages'
     expect(reference.metadata).toEqual({})
     expect(tag.metadata).toEqual({})
     expect(emptied.metadata).toEqual({})
+  })
+
+  it('keeps the pages of a directory deleted on GitHub in the trash when its folder goes', async () => {
+    const { repo, store, sync } = harness()
+    await sync()
+    const page = store.document('docs/guides/webhooks.md')
+    const folder = store.folder('docs/guides')
+    repo.push({ 'docs/guides/webhooks.md': null })
+    await sync()
+    expect(store.folders.has(folder.id)).toBe(false)
+    // Deleting a folder deletes what is filed in it, so the page is unfiled first.
+    expect(store.documents.get(page.id)).toMatchObject({ deleted: true, folderId: null })
+  })
+
+  it('removes the folders adoption emptied, and nothing else', async () => {
+    const { store, sync } = harness()
+    const imported = store.authorFolder('Imported docs')
+    const guides = store.authorFolder('Guides', imported.id)
+    store.authorDocument({ title: 'Webhooks', content: 'Coming soon.\n', folderId: guides.id, publicSlug: 'webhooks' })
+    // Emptied too, but it has a landing page of its own to lose.
+    const described = store.authorFolder('Described')
+    described.content = 'About this section.'
+    store.authorDocument({ title: 'API keys', content: 'Rotate keys often.\n', folderId: described.id, publicSlug: 'api-keys' })
+    // Still holds a page that is not in the repository.
+    const mixed = store.authorFolder('Mixed')
+    store.authorDocument({ title: 'Quickstart', content: 'Ship it.\n', folderId: mixed.id, publicSlug: 'quickstart' })
+    const notes = store.authorDocument({ title: 'Notes', content: 'Ours.', folderId: mixed.id, publicSlug: 'notes' })
+    // Never touched by the sync.
+    const fresh = store.authorFolder('Just created')
+
+    const result = await sync()
+    expect(result.adopted).toBe(3)
+    // The folder the page left goes, and then the parent that leaves empty.
+    expect(store.folders.has(guides.id)).toBe(false)
+    expect(store.folders.has(imported.id)).toBe(false)
+    expect(store.folders.has(described.id)).toBe(true)
+    expect(store.folders.has(mixed.id)).toBe(true)
+    expect(store.folders.has(fresh.id)).toBe(true)
+    expect(store.document('Notes').id).toBe(notes.id)
+  })
+
+  it('"Use GitHub" trashes the pages the repository does not have and removes the folders that empties', async () => {
+    const { store, sync, inspect } = harness()
+    await sync()
+    const imported = store.authorFolder('Imported docs')
+    const section = store.authorFolder('Old section', imported.id)
+    const extra = store.authorDocument({ title: 'Old page', content: 'Only here.', folderId: section.id, publicSlug: 'old-page' })
+    const loose = store.authorDocument({ title: 'Loose page', content: 'Only here.', publicSlug: 'loose-page' })
+    const empty = store.authorFolder('Empty')
+    // Kept: API reference pages and their folders, and role-restricted content.
+    const reference = store.authorFolder('API Reference')
+    const operation = store.authorDocument({ title: 'Get a customer', content: 'GET /customers/{id}', folderId: reference.id })
+    operation.metadata = { api_reference: { format: 'openapi', operation_id: 'getCustomerById' } }
+    const internal = store.authorFolder('Internal')
+    internal.restricted = true
+    const runbook = store.authorDocument({ title: 'Runbook', content: 'Private.', folderId: internal.id })
+    const linked = store.liveDocuments().filter((document) => document.metadata?.github_hosted_sync === true)
+
+    // An ordinary sync leaves all of it where it is.
+    await sync({ force: true })
+    expect(store.liveDocuments()).toContain(extra)
+    expect(store.folders.has(empty.id)).toBe(true)
+
+    const result = await sync({ mode: 'replace_breezify' })
+    expect(result.removed).toBe(2)
+    expect(extra.deleted).toBe(true)
+    expect(loose.deleted).toBe(true)
+    // In the trash, not gone with its folder.
+    expect(store.documents.has(extra.id)).toBe(true)
+    expect(extra.folderId).toBeNull()
+    expect(store.folders.has(section.id)).toBe(false)
+    expect(store.folders.has(imported.id)).toBe(false)
+    expect(store.folders.has(empty.id)).toBe(false)
+    expect(operation.deleted).toBe(false)
+    expect(store.folders.has(reference.id)).toBe(true)
+    expect(runbook.deleted).toBe(false)
+    expect(store.folders.has(internal.id)).toBe(true)
+    // Every page of the repository is still there, and nothing waits to be published.
+    expect(linked.every((document) => !document.deleted)).toBe(true)
+    expect(store.folder('docs/guides')).toBeDefined()
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0 })
+  })
+
+  it('"Use GitHub" clears nothing when the repository has no pages to show for it', async () => {
+    const { store, sync } = harness({ 'README.md': '# Not a docs project\n' })
+    const kept = store.authorDocument({ title: 'Only here', content: 'Ours.', publicSlug: 'only-here' })
+    const folder = store.authorFolder('Ours')
+    await sync({ mode: 'replace_breezify' })
+    expect(kept.deleted).toBe(false)
+    expect(store.folders.has(folder.id)).toBe(true)
   })
 })
 

@@ -47,6 +47,7 @@ const harness = vi.hoisted(() => {
       props: null as null | {
         content?: string
         editable?: boolean
+        autoFocus?: boolean
         onUpdate?: (html: string) => void
       },
     },
@@ -134,6 +135,7 @@ vi.mock("@/components/app/version-history-panel", () => ({
 
 import { DocumentEditor } from "./document-editor"
 import { DocumentControlsSlotProvider } from "./document-controls-slot"
+import { PortalEditorExitProvider } from "@/components/portal-builder/portal-editor-exit-context"
 import {
   saveActiveDocumentBeforeWorkspacePublish,
   subscribeToWorkspaceDocumentSaves,
@@ -654,5 +656,51 @@ describe("DocumentEditor GitHub fallback", () => {
         { method: "POST" },
       )
     })
+  })
+})
+
+describe("DocumentEditor in the portal builder's preview", () => {
+  function renderPreviewEditor(onExit: () => void): void {
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <PortalEditorExitProvider value={onExit}>
+          <DocumentEditor documentId="doc-1" />
+        </PortalEditorExitProvider>
+      </SWRConfig>,
+    )
+  }
+
+  it("doesn't put a caret in the document when it opens", () => {
+    renderPreviewEditor(vi.fn())
+    expect(harness.editor.props?.autoFocus).toBe(false)
+  })
+
+  it("saves pending edits before Cancel closes the editor", async () => {
+    const { fetchMock, resolvers } = installDeferredFetch()
+    const onExit = vi.fn()
+    renderPreviewEditor(onExit)
+
+    await emitEditorUpdate("<p>last words</p>")
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    // The preview renders this document from the server next, so it waits.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(savedBody(fetchMock, 0).content).toBe("<p>last words</p>")
+    expect(onExit).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolvers[0]?.(okResponse())
+    })
+    expect(onExit).toHaveBeenCalledTimes(1)
+  })
+
+  it("closes straight away when nothing is unsaved", () => {
+    const { fetchMock } = installDeferredFetch()
+    const onExit = vi.fn()
+    renderPreviewEditor(onExit)
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    expect(onExit).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

@@ -63,7 +63,6 @@ import {
   canManageKnowledgePortal,
   useKnowledgeBuilderActive,
 } from "@/components/app/knowledge-portal-access"
-import { WorkspaceChangesProvider } from "@/components/app/workspace-changes-context"
 
 // Each sub-navigation owns a substantial, route-specific client graph. Keep
 // inactive sections out of every authenticated route's initial graph; Next
@@ -74,6 +73,18 @@ const SettingsSubNav = dynamic(() =>
 const KnowledgeSubNav = dynamic(() =>
   import("@/components/app/knowledge-sub-nav").then(
     (mod) => mod.KnowledgeSubNav,
+  ),
+)
+// The Knowledge sidebar's GitHub chrome: the version pill in its header and
+// the publish control pinned to its foot.
+const GithubBranchPicker = dynamic(() =>
+  import("@/components/app/github-branch-picker").then(
+    (mod) => mod.GithubBranchPicker,
+  ),
+)
+const WorkspaceGitHubPublish = dynamic(() =>
+  import("@/components/app/workspace-github-publish").then(
+    (mod) => mod.WorkspaceGitHubPublish,
   ),
 )
 
@@ -322,7 +333,7 @@ function WorkspaceIcon({ workspace, size = "md" }: { workspace: WorkspaceInfo | 
           alt=""
           size={size === "sm" ? 24 : 28}
           className={cn(
-            "h-full w-full object-cover transition-opacity",
+            "h-full w-full object-contain transition-opacity",
             imageLoaded ? "opacity-100" : "opacity-0",
           )}
           onLoad={() => setLoadedIconUrl(iconUrl)}
@@ -607,6 +618,9 @@ function SubSidebarContent() {
     return (
       <SubSidebar
         title={pathname.startsWith("/editor") ? "Editor" : "Knowledge"}
+        // Both render nothing unless a docs repository is linked.
+        headerAction={<GithubBranchPicker align="end" />}
+        footer={<WorkspaceGitHubPublish />}
         scrollContent={false}
       >
         <Suspense>
@@ -690,6 +704,8 @@ function MobileSubSidebarContent({ open, onOpenChange }: { open: boolean; onOpen
     return (
       <MobileSubSidebar
         title={pathname.startsWith("/editor") ? "Editor" : "Knowledge"}
+        headerAction={<GithubBranchPicker align="end" />}
+        footer={<WorkspaceGitHubPublish />}
         scrollContent={false}
         open={open}
         onOpenChange={onOpenChange}
@@ -721,8 +737,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   return (
     <TooltipProvider delay={300}>
       <SubSidebarProvider>
-        <WorkspaceChangesProvider>
-          <ProductTourProvider>
+        <ProductTourProvider>
           <WorkspaceRealtimeSync />
           <div className="flex h-screen bg-background text-foreground">
             <aside
@@ -772,8 +787,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           </div>
-          </ProductTourProvider>
-        </WorkspaceChangesProvider>
+        </ProductTourProvider>
       </SubSidebarProvider>
     </TooltipProvider>
   )

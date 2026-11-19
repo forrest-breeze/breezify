@@ -22,7 +22,6 @@ import { useGithubHostedDocs, useOpenApiSources } from "@/hooks/swr";
 interface IntegrationDef {
   id: string;
   name: string;
-  description: string;
   logo?: string;
   icon?: React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
   invertInDark?: boolean;
@@ -41,14 +40,12 @@ const CONNECTED_APPS: IntegrationDef[] = [
   {
     id: "openapi",
     name: "OpenAPI",
-    description: "Publish API reference from a spec.",
     icon: FileJson,
     href: "/settings/integrations/openapi",
   },
   {
     id: "github",
     name: "GitHub",
-    description: "Two-way docs sync with a repository.",
     icon: GitHubMark,
     href: "/settings/integrations/github",
   },
@@ -97,7 +94,7 @@ export default function IntegrationsLayout({
         <Link
           href={def.href}
           className={cn(
-            "flex items-start gap-3 rounded-md border px-3 py-2.5 transition",
+            "flex items-center gap-3 rounded-md border px-3 py-2 transition",
             active
               ? "border-foreground bg-muted"
               : "border-transparent hover:border-border hover:bg-muted/50",
@@ -137,9 +134,6 @@ export default function IntegrationsLayout({
                 </Badge>
               ) : null}
             </div>
-            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-              {def.description}
-            </p>
           </div>
         </Link>
       </li>
@@ -147,12 +141,11 @@ export default function IntegrationsLayout({
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 p-6 lg:p-8">
+    // min-h-full, not h-full: the page grows past the viewport inside the
+    // shell's scrolling <main>, so the bottom padding lands after the content.
+    <div className="flex min-h-full flex-col gap-4 p-6 pb-16 lg:p-8 lg:pb-20">
       <div>
         <h1 className="text-xl font-semibold">Integrations</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Connect Breezify to the tools your team already uses.
-        </p>
       </div>
 
       <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">

@@ -45,7 +45,11 @@ export function KbReadingToc({
       >
         On this page
       </p>
-      <ul className="border-l border-border">
+      {/* Each item draws its own slice of the track line. Overlapping a list
+          border with a -1px margin breaks under CSS `zoom` (the portal
+          editor's preview): the shifted active border can round outside the
+          scroll container and get clipped. */}
+      <ul>
         {headings.map((heading) => (
           <li key={heading.id}>
             <button
@@ -56,12 +60,12 @@ export function KbReadingToc({
                 paddingLeft: `${(heading.level - minLevel) * 12 + 12}px`,
               }}
               className={cn(
-                "-ml-px block w-full truncate rounded-r-md border-l py-1 pr-2 text-left text-[13px] leading-snug transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                "block w-full truncate rounded-r-md border-l py-1 pr-2 text-left text-[13px] leading-snug transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                 activeId === heading.id
                   ? isDocs
                     ? "border-foreground bg-transparent font-semibold text-foreground"
                     : "border-primary bg-primary/10 font-medium text-primary"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
+                  : "border-border text-muted-foreground hover:text-foreground",
                 isDocs && "py-1.5",
               )}
             >

@@ -93,7 +93,7 @@ function publicAppOrigin(): string {
 }
 
 /**
- * Make a root-relative app asset (e.g. the seeded "/breeze-icon.png" workspace
+ * Make a root-relative app asset (e.g. the seeded "/breeze-mark.png" workspace
  * icon) absolute on the app origin. Portals also render on custom domains and
  * reverse-proxy mounts, where a root-relative path would 404. Absolute URLs
  * and protocol-relative ones pass through unchanged.

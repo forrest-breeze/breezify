@@ -30,6 +30,33 @@ export function PortalScrollbars(): null {
   }, [])
 
   useEffect(() => {
+    // Where scrollbars take up layout space (a mouse is attached, or the OS is
+    // set to always show them) the page scrollbar's track is a visible strip
+    // down the right edge. A transparent track shows whatever is behind the
+    // document — the app's own background, or the builder's preview frame —
+    // which reads as the portal being cut off whenever that differs from the
+    // portal's theme. Paint the track in the portal's page background instead.
+    // That color depends on the root's light/dark class and custom background,
+    // so keep following it as those change.
+    const html = document.documentElement
+    const root = document.querySelector("[data-portal-root]")
+    if (!root) return
+    const sync = (): void => {
+      html.style.setProperty(
+        "--portal-page-background",
+        getComputedStyle(root).backgroundColor,
+      )
+    }
+    sync()
+    const observer = new MutationObserver(sync)
+    observer.observe(root, { attributes: true })
+    return () => {
+      observer.disconnect()
+      html.style.removeProperty("--portal-page-background")
+    }
+  }, [])
+
+  useEffect(() => {
     const timers = new WeakMap<Element, ReturnType<typeof setTimeout>>()
     const onScroll = (event: Event): void => {
       const target =

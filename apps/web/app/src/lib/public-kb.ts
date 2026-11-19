@@ -2,7 +2,14 @@ import "server-only"
 
 import { cache } from "react"
 import { isNavigableDocument } from "@/lib/document-navigation"
+import { nonPublicFolderIds } from "@/lib/folder-visibility"
 import { readPublishedDate } from "@/lib/documents/published-date"
+import {
+  REPOSITORY_HIDDEN_SELECT,
+  isRepositoryHiddenDocument,
+  isRepositoryHiddenFolderIndex,
+  repositoryHiddenFolderIds,
+} from "@/lib/documents/repository-hidden"
 import { unstable_cache } from "next/cache"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getAuthUser } from "@/lib/auth/get-auth-user"
@@ -44,6 +51,10 @@ import type { DocumentLinkEntry, DocumentLinkStrength } from "@/lib/types"
 //   • documents: deleted_at IS NULL AND (folder_id IS NULL OR folder ∈ visible)
 //   • documents: document_type IN ('source','page') ONLY (no synthesized
 //     topic_page rows)
+//   • documents: NOT hidden in their GitHub docs repository (`hidden: true`
+//     frontmatter, see lib/documents/repository-hidden.ts)
+//   • folders: NOT beneath a folder that is itself not public — visibility is
+//     inherited down the tree (getNonPublicFolderIds)
 //
 // This mirrors the established /api/v1/documents "workspace-scope" contract for
 // portal-visible content. Role-gated and trashed content can never surface here,
@@ -53,8 +64,9 @@ import type { DocumentLinkEntry, DocumentLinkStrength } from "@/lib/types"
 // service-role admin client, which BYPASSES RLS, so the contract above lives
 // entirely in this file. Any new query MUST re-apply it by hand:
 // publicVisibleFolderIds() / visibleDocFilter() for folder scoping,
-// `deleted_at IS NULL`, and the `document_type IN ('source','page')` allowlist
-// for document listings/fetches. Omit one and hidden content leaks.
+// `deleted_at IS NULL`, the `document_type IN ('source','page')` allowlist, and
+// isRepositoryHiddenDocument() for document listings/fetches. Omit one and
+// hidden content leaks.
 // ---------------------------------------------------------------------------
 
 const PUBLIC_FOLDER_VISIBILITY = "workspace" as const
@@ -74,6 +86,8 @@ interface PublicDocRow {
   content?: string | null
   source: string | null
   source_metadata?: unknown
+  /** `REPOSITORY_HIDDEN_SELECT` alias, on listings that skip the metadata. */
+  readme_hidden?: unknown
   updated_at?: string
   folder_id?: string | null
   sort_order?: number | null
@@ -670,6 +684,41 @@ function assertNoQueryError(
 }
 
 /**
+ * Folders the public cannot see: every folder that is not Public, and every
+ * folder beneath one. A folder's own `visibility` is not enough to serve it —
+ * a Public folder inside a Members folder is members-only too — so every read
+ * path removes these on top of its own visibility filter.
+ *
+ * React-cached so the several gates of one request share a single lookup.
+ */
+export const getNonPublicFolderIds = cache(
+  async (workspaceId: string): Promise<Set<string>> => {
+    const { data, error } = await createAdminClient()
+      .from("folders")
+      .select("id, parent_folder_id, visibility")
+      .eq("workspace_id", workspaceId)
+    assertNoQueryError("non-public folders", error)
+    return nonPublicFolderIds(
+      (Array.isArray(data) ? data : []) as Array<{
+        id: string
+        parent_folder_id: string | null
+        visibility: string | null
+      }>,
+    )
+  },
+)
+
+/**
+ * Editor surfaces that list a project's content pass `includeNonPublic` so
+ * members still see (and can edit) folders the public portal does not serve;
+ * the caller's own row-level access then decides what they get. Every public
+ * read leaves it unset.
+ */
+export interface PublicScopeOptions {
+  includeNonPublic?: boolean
+}
+
+/**
  * Expand a set of root folder ids to themselves + all descendants, intersected
  * with the workspace's public-visible (non-topic) folders. Folders are loaded
  * once and walked in memory (the public folder tree per workspace is small).
@@ -679,15 +728,21 @@ async function scopedFolderIdSet(
   workspaceId: string,
   scopeRootIds: string[],
   rootOnlyIds: string[] = [],
+  options: PublicScopeOptions = {},
 ): Promise<Set<string>> {
-  const { data, error } = await admin
+  let query = admin
     .from("folders")
     .select("id, kind, parent_folder_id")
     .eq("workspace_id", workspaceId)
-    .eq("visibility", PUBLIC_FOLDER_VISIBILITY)
+  if (!options.includeNonPublic) query = query.eq("visibility", PUBLIC_FOLDER_VISIBILITY)
+  const { data, error } = await query
   assertNoQueryError("scoped folder set", error)
 
-  return expandScope((data ?? []) as ScopeFolderRow[], scopeRootIds, rootOnlyIds)
+  const allowed = expandScope((data ?? []) as ScopeFolderRow[], scopeRootIds, rootOnlyIds)
+  if (!options.includeNonPublic) {
+    for (const id of await getNonPublicFolderIds(workspaceId)) allowed.delete(id)
+  }
+  return allowed
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +760,7 @@ async function publicVisibleFolderIds(
   admin: SupabaseClient,
   workspaceId: string,
   scope?: PublicKbScope,
+  options: PublicScopeOptions = {},
 ): Promise<string[]> {
   if (Array.isArray(scope)) {
     const parts = scopeParts(scope) as ScopeParts
@@ -713,18 +769,21 @@ async function publicVisibleFolderIds(
       workspaceId,
       parts.recursiveRootIds,
       parts.rootOnlyIds,
+      options,
     )
     return Array.from(allowed)
   }
-  const { data, error } = await admin
-    .from("folders")
-    .select("id, kind")
-    .eq("workspace_id", workspaceId)
-    .eq("visibility", PUBLIC_FOLDER_VISIBILITY)
+  let query = admin.from("folders").select("id, kind").eq("workspace_id", workspaceId)
+  if (!options.includeNonPublic) query = query.eq("visibility", PUBLIC_FOLDER_VISIBILITY)
+  const { data, error } = await query
   assertNoQueryError("public visible folders", error)
+  const nonPublic = options.includeNonPublic
+    ? new Set<string>()
+    : await getNonPublicFolderIds(workspaceId)
   return (data ?? [])
     .filter((row) => (row as { kind: string }).kind !== "topic")
     .map((row) => (row as { id: string }).id)
+    .filter((id) => !nonPublic.has(id))
 }
 
 /**
@@ -736,11 +795,13 @@ async function publicVisibleFolderIds(
 export async function getPublicVisibleFolderIds(
   workspaceId: string,
   scope?: PublicKbScope,
+  options: PublicScopeOptions = {},
 ): Promise<string[]> {
   return publicVisibleFolderIds(
     createAdminClient(),
     workspaceId,
     isScopeProvided(scope) ? scope : undefined,
+    options,
   )
 }
 
@@ -792,9 +853,12 @@ async function resolveDocScopeFromParts(
   admin: SupabaseClient,
   workspaceId: string,
   parts: ScopeParts | null,
+  options: PublicScopeOptions = {},
 ): Promise<PublicDocScope> {
   if (parts === null) {
-    const all = new Set(await publicVisibleFolderIds(admin, workspaceId))
+    const all = new Set(
+      await publicVisibleFolderIds(admin, workspaceId, undefined, options),
+    )
     return {
       scoped: false,
       folderIds: all,
@@ -808,6 +872,7 @@ async function resolveDocScopeFromParts(
     workspaceId,
     parts.recursiveRootIds,
     parts.rootOnlyIds,
+    options,
   )
   const explicit = new Set(parts.explicitDocsIds)
   const docFolderIds = new Set(
@@ -829,11 +894,13 @@ async function resolveDocScopeFromParts(
 export async function getPublicDocScope(
   workspaceId: string,
   scope?: PublicKbScope,
+  options: PublicScopeOptions = {},
 ): Promise<PublicDocScope> {
   return resolveDocScopeFromParts(
     createAdminClient(),
     workspaceId,
     scopeParts(scope),
+    options,
   )
 }
 
@@ -939,7 +1006,18 @@ async function fetchPublicTaxonomy(
     }
   })
 
-  return shapePublicTaxonomy(rows, allowed, promotedRootIds, rootOnlyIds)
+  // A Public folder inside a folder that is not public is not served either.
+  const nonPublic = await getNonPublicFolderIds(workspaceId)
+  const listed = nonPublic.size > 0 ? rows.filter((row) => !nonPublic.has(row.id)) : rows
+  // A directory the repository hides entirely stays out of the navigation
+  // instead of rendering as an empty section.
+  const hiddenFolderIds = await repositoryHiddenFolderIds(admin, workspaceId, listed)
+  return shapePublicTaxonomy(
+    hiddenFolderIds.size > 0 ? listed.filter((row) => !hiddenFolderIds.has(row.id)) : listed,
+    allowed,
+    promotedRootIds,
+    rootOnlyIds,
+  )
 }
 
 const getPublicTaxonomyCached = unstable_cache(
@@ -1097,6 +1175,7 @@ async function fetchPublicDocRows(
   return ((data ?? []) as PublicDocRow[]).filter(
     (row) =>
       isNavigableDocument({ source: row.source, folder_id: row.folder_id ?? null }) &&
+      !isRepositoryHiddenDocument(row) &&
       docScopePermits(ds, { id: row.id, folder_id: row.folder_id ?? null }),
   )
 }
@@ -1257,7 +1336,7 @@ export const getPublicFolderDetail = cache(async (
   const admin = createAdminClient()
   const { data: folder, error: folderError } = await admin
     .from("folders")
-    .select("id, display_name, name, kind, visibility, parent_folder_id, content")
+    .select("id, display_name, name, kind, visibility, parent_folder_id, content, source_metadata")
     .eq("id", folderId)
     .eq("workspace_id", workspaceId)
     .maybeSingle()
@@ -1272,9 +1351,13 @@ export const getPublicFolderDetail = cache(async (
     visibility: string
     parent_folder_id: string | null
     content: string | null
+    source_metadata: unknown
   }
   if (f.visibility !== PUBLIC_FOLDER_VISIBILITY) return null
   if (f.kind === "topic") return null
+  // Not public if any folder above it is not.
+  const nonPublic = await getNonPublicFolderIds(workspaceId)
+  if (nonPublic.has(f.id)) return null
 
   const [childrenRes, docsRes, ancestors] = await Promise.all([
     admin
@@ -1287,7 +1370,7 @@ export const getPublicFolderDetail = cache(async (
       .order("display_name", { ascending: true }),
     admin
       .from("documents")
-      .select("id, public_slug, title, source, updated_at, folder_id, sort_order")
+      .select(`id, public_slug, title, source, updated_at, folder_id, sort_order, ${REPOSITORY_HIDDEN_SELECT}`)
       .eq("workspace_id", workspaceId)
       .eq("folder_id", folderId)
       .is("deleted_at", null)
@@ -1303,6 +1386,7 @@ export const getPublicFolderDetail = cache(async (
 
   const children: PublicFolderSummary[] = (childrenRes.data ?? [])
     .filter((row) => (row as { kind: string }).kind !== "topic")
+    .filter((row) => !nonPublic.has((row as { folder_id: string }).folder_id))
     .map((row) => {
       const r = row as {
         folder_id: string
@@ -1327,16 +1411,25 @@ export const getPublicFolderDetail = cache(async (
       }
     })
 
+  const documents = ((docsRes.data ?? []) as PublicDocRow[])
+    .filter((row) => !isRepositoryHiddenDocument(row))
+    .map(toDocSummary)
+  // A hidden landing page is not served, and with every page under it hidden
+  // too the folder has nothing public left — the same rule that keeps it out of
+  // the navigation (repositoryHiddenFolderIds).
+  const indexHidden = isRepositoryHiddenFolderIndex(f.source_metadata)
+  if (indexHidden && documents.length === 0 && children.length === 0) return null
+
   return {
     folder: {
       id: f.id,
       display_name: f.display_name || f.name,
       kind: f.kind,
-      content: f.content,
+      content: indexHidden ? null : f.content,
     },
     ancestors,
     children,
-    documents: ((docsRes.data ?? []) as PublicDocRow[]).map(toDocSummary),
+    documents,
   }
 })
 
@@ -1374,6 +1467,9 @@ export const getPublicDocument = cache(async (
   }
   if (d.deleted_at) return null
   if (!isNavigableDocument({ source: d.source, folder_id: d.folder_id })) return null
+  // Hidden in the repository means unpublished, not merely unlisted: the direct
+  // link 404s too.
+  if (isRepositoryHiddenDocument(d)) return null
 
   if (d.folder_id) {
     const { data: folder, error: folderError } = await admin
@@ -1388,6 +1484,8 @@ export const getPublicDocument = cache(async (
     if (!f || f.visibility !== PUBLIC_FOLDER_VISIBILITY || f.kind === "topic") {
       return null
     }
+    // The folder's own setting is not enough: a folder above it may not be public.
+    if ((await getNonPublicFolderIds(workspaceId)).has(d.folder_id)) return null
   }
 
   return {
@@ -1454,7 +1552,7 @@ export async function getPublicDocumentLinks(
   const ds = await resolveDocScopeFromParts(admin, workspaceId, scopeParts(scope))
   const { data: docs, error: docsError } = await admin
     .from("documents")
-    .select("id, public_slug, title, source, document_type, folder_id")
+    .select(`id, public_slug, title, source, document_type, folder_id, ${REPOSITORY_HIDDEN_SELECT}`)
     .eq("workspace_id", workspaceId)
     .is("deleted_at", null)
     .in("id", referencedIds)
@@ -1471,10 +1569,12 @@ export async function getPublicDocumentLinks(
     source: string | null
     document_type: string
     folder_id: string | null
+    readme_hidden?: unknown
   }
   const docsById = new Map<string, LinkDocRow>()
   for (const doc of (docs ?? []) as LinkDocRow[]) {
     if (!isNavigableDocument({ source: doc.source, folder_id: doc.folder_id ?? null })) continue
+    if (isRepositoryHiddenDocument(doc)) continue
     if (!docScopePermits(ds, { id: doc.id, folder_id: doc.folder_id ?? null })) continue
     docsById.set(doc.id, doc)
   }
@@ -1717,7 +1817,7 @@ export async function searchPublic(
     // Every publicly visible doc's title, through the public-visibility gate.
     admin
       .from("documents")
-      .select("id, public_slug, title, source, folder_id")
+      .select(`id, public_slug, title, source, folder_id, ${REPOSITORY_HIDDEN_SELECT}`)
       .eq("workspace_id", workspaceId)
       .is("deleted_at", null)
       .in("document_type", ["source", "page"])
@@ -1740,6 +1840,7 @@ export async function searchPublic(
   const allowedById = new Map<string, PublicDocSummary>()
   const admit = (doc: PublicDocRow): void => {
     if (!isNavigableDocument({ source: doc.source, folder_id: doc.folder_id ?? null })) return
+    if (isRepositoryHiddenDocument(doc)) return
     if (!docScopePermits(ds, { id: doc.id, folder_id: doc.folder_id ?? null })) return
     allowedById.set(doc.id, toDocSummary(doc))
   }
@@ -1760,7 +1861,7 @@ export async function searchPublic(
   if (grepIds.length > 0) {
     const { data: allowed, error: allowedError } = await admin
       .from("documents")
-      .select("id, public_slug, title, source, folder_id")
+      .select(`id, public_slug, title, source, folder_id, ${REPOSITORY_HIDDEN_SELECT}`)
       .eq("workspace_id", workspaceId)
       .is("deleted_at", null)
       .in("id", grepIds)

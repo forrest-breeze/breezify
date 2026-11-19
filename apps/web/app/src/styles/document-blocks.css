@@ -95,7 +95,7 @@
   );
   transition: border-color .15s ease, background-color .15s ease;
 }
-.dark :is(.portal-docs-prose, .breezify-editor) [data-document-card] {
+.dark :is(.portal-docs-prose, .breezify-editor) [data-document-card]:not(:where(.dark .light *)) {
   background: color-mix(in oklab, var(--card-accent) 10%, var(--card-surface));
 }
 :is(.portal-docs-prose, .breezify-editor) [data-document-card] > [data-card-title] {

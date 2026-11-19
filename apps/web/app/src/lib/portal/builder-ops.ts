@@ -247,7 +247,7 @@ export function setFooter(
   const footer = layout.footer ?? {
     id: "footer",
     type: "footer" as const,
-    showPoweredBy: true,
+    showPoweredBy: false,
   }
   return validated(
     {
@@ -267,7 +267,7 @@ export function setFooterPoweredBy(
   const footer = layout.footer ?? {
     id: "footer",
     type: "footer" as const,
-    showPoweredBy: true,
+    showPoweredBy: false,
   }
   return validated(
     { ...layout, footer: { ...footer, showPoweredBy } },

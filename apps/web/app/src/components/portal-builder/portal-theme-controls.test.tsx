@@ -24,7 +24,7 @@ function layout(): PortalLayout {
       search: { enabled: true, placeholder: "Search or ask AI" },
     },
     body: [],
-    footer: { id: "footer", type: "footer", showPoweredBy: true },
+    footer: { id: "footer", type: "footer", showPoweredBy: false },
   }
 }
 
@@ -142,5 +142,40 @@ describe("PortalThemeControls", () => {
     const next = onLayoutChange.mock.calls[0]?.[0].theme
     expect(next.darkFaviconUrl).toBe("")
     expect(next.faviconUrl).toBe("/favicon-light.png")
+  })
+
+  it("offers the Powered by Breeze credit as an opt-in switch that starts off", () => {
+    const onLayoutChange = vi.fn()
+    render(
+      <PortalThemeControls
+        layout={layout()}
+        onLayoutChange={onLayoutChange}
+        canRemoveBreezifyBranding
+      />,
+    )
+
+    const toggle = screen.getByRole("switch", { name: "Show Powered by Breeze" })
+    expect(toggle).toHaveAttribute("aria-checked", "false")
+
+    fireEvent.click(toggle)
+
+    expect(onLayoutChange).toHaveBeenCalledTimes(1)
+    expect(onLayoutChange.mock.calls[0]?.[0].footer.showPoweredBy).toBe(true)
+  })
+
+  it("treats a footer with no stored choice as credit off", () => {
+    const base = layout()
+    delete base.footer
+    render(
+      <PortalThemeControls
+        layout={base}
+        onLayoutChange={vi.fn()}
+        canRemoveBreezifyBranding
+      />,
+    )
+
+    expect(
+      screen.getByRole("switch", { name: "Show Powered by Breeze" }),
+    ).toHaveAttribute("aria-checked", "false")
   })
 })

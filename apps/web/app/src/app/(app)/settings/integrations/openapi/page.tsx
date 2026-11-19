@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
+import { InfoHint } from "@/components/ui/tooltip"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,18 +57,6 @@ export default function OpenApiIntegrationPage(): React.JSX.Element {
     <div className="space-y-8">
       <header>
         <h2 className="text-base font-semibold">OpenAPI</h2>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Publish API reference pages from an OpenAPI spec (JSON or YAML, 3.0 /
-          3.1 or Swagger 2.0). Each operation becomes a page, grouped by tag.
-          Every upload replaces the previous one: changed pages update, new
-          operations appear and removed ones are deleted. When a repository is
-          linked under{" "}
-          <Link href="/settings/integrations/github" className="underline">
-            GitHub
-          </Link>
-          , specs in its <code>reference/</code> folder are listed here too,
-          and uploads are written back to that folder.
-        </p>
       </header>
 
       <section aria-labelledby="openapi-sources">
@@ -252,16 +241,16 @@ function UploadForm({ onUploaded }: { onUploaded: () => void }): React.JSX.Eleme
       <form onSubmit={(e) => void submit(e)} className="mt-3 space-y-3 rounded-md border p-4">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="openapi-slug">Name</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="openapi-slug">Name</Label>
+              <InfoHint>Stable ID for this spec. Uploading to the same name replaces it.</InfoHint>
+            </div>
             <Input
               id="openapi-slug"
               value={slug}
               onChange={(e) => setSlug(e.target.value.trim().toLowerCase())}
               aria-invalid={!slugValid}
             />
-            <p className="text-xs text-muted-foreground">
-              Stable ID for this spec. Uploading to the same name replaces it.
-            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="openapi-file">Spec file (JSON or YAML)</Label>

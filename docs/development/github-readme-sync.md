@@ -65,10 +65,17 @@ and when Settings is opened with a newer commit on the branch.
   text differs from the file, it is flagged as a conflict and Breezify's text
   stays until someone publishes it or chooses "Use GitHub". Pages in
   role-restricted folders, API reference pages, and pages that were ever tied
-  to a repository file are never adopted. Folders the adopted pages leave are
-  kept, empty.
+  to a repository file are never adopted. A folder the adopted pages leave is
+  removed if that empties it (no pages, no child folders, no landing content),
+  and so are its parents once they are empty too.
 - A file deleted on GitHub removes its document, unless the document was edited
   in Breezify, in which case it is kept and flagged.
+- **"Use GitHub"** makes the workspace match the repository. Besides taking the
+  repository's version of every linked page, it moves the pages that are not in
+  the repository to the trash and removes the folders that leaves empty. API
+  reference pages and anything in a role-restricted folder are kept: the sync
+  mirrors neither. So is a page whose slug matches a file the sync could not
+  read. Nothing is cleared when the repository has no readable page at all.
 - A document deleted in Breezify is not imported again by a later push; its file
   is removed by the next publish.
 - A file that cannot be read (invalid YAML frontmatter, too large) is skipped

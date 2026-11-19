@@ -12,7 +12,10 @@ import {
 
 interface SubSidebarProps {
   title?: string
+  /** Rendered at the right edge of the title row. */
+  headerAction?: React.ReactNode
   children: React.ReactNode
+  /** Pinned below the content. Takes no room while it renders nothing. */
   footer?: React.ReactNode
   /** Disable the outer viewport when a child owns a bounded scroll region. */
   scrollContent?: boolean
@@ -20,6 +23,7 @@ interface SubSidebarProps {
 
 export function SubSidebar({
   title,
+  headerAction,
   children,
   footer,
   scrollContent = true,
@@ -43,8 +47,11 @@ export function SubSidebar({
       {isOpen && (
         <>
           {title && (
-            <div className="flex h-14 shrink-0 items-center px-4">
-              <span className="text-sm font-semibold">{title}</span>
+            <div className="flex h-14 shrink-0 items-center justify-between gap-2 px-4">
+              <span className="shrink-0 text-sm font-semibold">{title}</span>
+              {headerAction ? (
+                <div className="flex min-w-0 justify-end">{headerAction}</div>
+              ) : null}
             </div>
           )}
 
@@ -68,7 +75,7 @@ export function SubSidebar({
           {footer ? (
             <div
               data-slot="sub-sidebar-footer"
-              className="shrink-0 bg-background px-2 pb-4"
+              className="shrink-0 bg-background px-2 pb-4 empty:hidden"
             >
               {footer}
             </div>
@@ -91,7 +98,10 @@ export function SubSidebar({
 
 interface MobileSubSidebarProps {
   title?: string
+  /** Rendered at the right edge of the title row. */
+  headerAction?: React.ReactNode
   children: React.ReactNode
+  /** Pinned below the content. Takes no room while it renders nothing. */
   footer?: React.ReactNode
   /** Disable the outer viewport when a child owns a bounded scroll region. */
   scrollContent?: boolean
@@ -101,6 +111,7 @@ interface MobileSubSidebarProps {
 
 export function MobileSubSidebar({
   title,
+  headerAction,
   children,
   footer,
   scrollContent = true,
@@ -111,8 +122,11 @@ export function MobileSubSidebar({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" showCloseButton={false} className="w-[260px] p-0 flex flex-col">
         {title && (
-          <div className="flex h-14 shrink-0 items-center border-b border-border px-4">
-            <SheetTitle className="text-sm font-semibold">{title}</SheetTitle>
+          <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
+            <SheetTitle className="shrink-0 text-sm font-semibold">{title}</SheetTitle>
+            {headerAction ? (
+              <div className="flex min-w-0 justify-end">{headerAction}</div>
+            ) : null}
           </div>
         )}
         <div className="flex-1 min-h-0">
@@ -132,7 +146,7 @@ export function MobileSubSidebar({
         {footer ? (
           <div
             data-slot="sub-sidebar-footer"
-            className="shrink-0 bg-background px-2 pb-4"
+            className="shrink-0 bg-background px-2 pb-4 empty:hidden"
           >
             {footer}
           </div>

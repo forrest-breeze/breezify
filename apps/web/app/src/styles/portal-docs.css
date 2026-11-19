@@ -226,8 +226,8 @@
 }
 
 /* Dark scheme: swap to Shiki's dark palette + background. */
-.dark .portal-docs-prose .shiki,
-.dark .portal-docs-prose .shiki span {
+.dark .portal-docs-prose .shiki:not(:where(.dark .light *)),
+.dark .portal-docs-prose .shiki span:not(:where(.dark .light *)) {
   color: var(--shiki-dark);
   background-color: var(--shiki-dark-bg);
 }

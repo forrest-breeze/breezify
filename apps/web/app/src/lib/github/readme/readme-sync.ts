@@ -731,6 +731,8 @@ export async function syncReadmeRepository(
   }
 
   let preserved = 0
+  /** Folders that adopted pages moved out of; removed below if left empty. */
+  const vacatedFolders = new Set<string>()
   const uniqueSlug = (page: ParsedPage): string => {
     const base = pageSlug(page)
     const section = readmeSectionOf(page.relative) ?? 'docs'
@@ -764,6 +766,9 @@ export async function syncReadmeRepository(
     const folderId = folderIdForPage(page.relative)
     const sortOrder = orderIndex(full(page.directory), basenameWithoutExtension(page.relative))
     const status = page.hidden ? 'Draft' : 'Published'
+    if (existing && existing === adoptedDocument && existing.folderId && existing.folderId !== folderId) {
+      vacatedFolders.add(existing.folderId)
+    }
 
     if (!existing) {
       const id = await store.insertDocument({
@@ -1019,33 +1024,91 @@ export async function syncReadmeRepository(
     }
   }
 
-  // --- Folders whose directory is gone ---------------------------------------
-  const [finalFolders, finalDocuments] = await Promise.all([
+  const [finalFolders, listedDocuments] = await Promise.all([
     store.listFolders(),
     store.listDocuments(),
   ])
+  let finalDocuments = listedDocuments
+
+  // --- Pages the repository does not have ("Use GitHub") ----------------------
+  // Replace mode makes the workspace match the repository, so a page that is
+  // not one of its files goes to the trash: one that was only ever in
+  // Breezify, one whose first publish is still pending, one that outlived its
+  // file. Left alone are the pages the sync never mirrors in either direction
+  // (API reference pages, anything in a role-restricted folder) and a page
+  // that may stand in for a file this sync could not read. A repository with no
+  // readable page at all (a wrong root or branch, most likely) clears nothing.
+  if (target.mode === 'replace_breezify' && activePaths.size > 0) {
+    const finalFolderById = new Map(finalFolders.map((folder) => [folder.id, folder]))
+    const unreadableSlugs = new Set(
+      [...protectedPaths].map((path) =>
+        slugifySegment(basenameWithoutExtension(relativeReadmePath(root, path) ?? path), 'page'),
+      ),
+    )
+    const leftover = listedDocuments.filter((document) => {
+      const link = readReadmeDocumentLink(document.metadata, repoId)
+      if (link && (activePaths.has(link.path) || protectedPaths.has(link.path))) return false
+      if (isApiReferencePage(document.metadata)) return false
+      if (document.folderId && finalFolderById.get(document.folderId)?.restricted !== false) {
+        return false
+      }
+      if (document.publicSlug && unreadableSlugs.has(document.publicSlug)) return false
+      return true
+    })
+    if (leftover.length > 0) {
+      // As above: a trashed document that is still linked would read as a
+      // deletion waiting to be published.
+      await mapWithConcurrency(
+        leftover.filter((document) => document.metadata?.github_hosted_sync === true),
+        WRITE_CONCURRENCY,
+        (document) =>
+          store.updateDocument(document.id, {
+            metadata: { ...(document.metadata ?? {}), github_hosted_sync: false },
+          }),
+      )
+      await store.softDeleteDocuments(leftover.map((document) => document.id))
+      removed += leftover.length
+      const trashed = new Set(leftover.map((document) => document.id))
+      finalDocuments = listedDocuments.filter((document) => !trashed.has(document.id))
+    }
+  }
+
+  // --- Folders with nothing left in them --------------------------------------
+  // A mirrored folder goes when its directory is gone. A folder that was never
+  // in the repository goes when the sync is what emptied it: adoption moved
+  // its pages into the repository's tree, or replace mode cleared it. Its
+  // parents follow once that leaves them empty too. Folders someone made and
+  // has not filled yet are not the sync's to remove outside replace mode, and
+  // role-restricted folders never are.
   const activeDirectories = new Set(directories.map((directory) => full(directory)))
   const occupied = new Set<string>()
   for (const document of finalDocuments) {
     if (document.folderId) occupied.add(document.folderId)
   }
   const remaining = new Map(finalFolders.map((folder) => [folder.id, folder]))
-  for (let pass = 0; pass < 16; pass++) {
+  for (let pass = 0; pass < 64; pass++) {
     const parents = new Set(
       [...remaining.values()].map((folder) => folder.parentId).filter(Boolean) as string[],
     )
     const empty = [...remaining.values()].filter((folder) => {
+      if (occupied.has(folder.id) || parents.has(folder.id)) return false
       const link = readReadmeFolderLink(folder.metadata, repoId)
-      return (
-        link !== null &&
-        !activeDirectories.has(link.path) &&
-        !occupied.has(folder.id) &&
-        !parents.has(folder.id)
-      )
+      if (link !== null) return !activeDirectories.has(link.path)
+      if (folder.restricted) return false
+      if (target.mode === 'replace_breezify' && activePaths.size > 0) return true
+      return vacatedFolders.has(folder.id) && !folder.content?.trim()
     })
     if (empty.length === 0) break
     for (const folder of empty) {
-      await store.deleteFolder(folder.id)
+      if (!(await store.deleteFolderIfEmpty(folder.id))) {
+        // It holds something the sync does not manage; it stays, and so do
+        // the folders above it.
+        occupied.add(folder.id)
+        continue
+      }
+      if (folder.parentId && readReadmeFolderLink(folder.metadata, repoId) === null) {
+        vacatedFolders.add(folder.parentId)
+      }
       remaining.delete(folder.id)
     }
   }

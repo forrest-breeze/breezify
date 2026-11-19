@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { InfoHint } from "@/components/ui/tooltip"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,13 +55,8 @@ const CHECK_MODES: Array<{ value: DocsCheckMode; label: string }> = [
   { value: "blocking", label: "Blocking" },
 ]
 
-const CHECKS: Array<{ key: keyof DocsChecksSettings; title: string; description: string }> = [
-  {
-    key: "brokenLinks",
-    title: "Broken links",
-    description:
-      "Check every commit and pull request in the linked repository for links to docs pages or files that do not exist. Warning reports them; Blocking fails the check. External URLs are not fetched.",
-  },
+const CHECKS: Array<{ key: keyof DocsChecksSettings; title: string; description?: string }> = [
+  { key: "brokenLinks", title: "Broken links" },
   {
     key: "formatting",
     title: "Formatting",
@@ -76,19 +72,22 @@ function SettingRow({
   children,
 }: {
   title: string
-  description: string
+  /** Hover help, only for options whose effect is not obvious from the title. */
+  description?: string
   /** Why the option has no effect right now. */
   note?: string | null
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className="flex items-start justify-between gap-6 px-4 py-3.5">
-      <div className="min-w-0 space-y-1">
-        <p className="text-sm font-medium">{title}</p>
-        <p className="max-w-xl text-xs leading-5 text-muted-foreground">{description}</p>
+    <div className="flex items-center justify-between gap-6 px-4 py-3">
+      <div className="min-w-0 space-y-0.5">
+        <p className="flex items-center gap-1.5 text-sm font-medium">
+          {title}
+          {description ? <InfoHint>{description}</InfoHint> : null}
+        </p>
         {note ? <p className="text-xs leading-5 text-amber-700 dark:text-amber-400">{note}</p> : null}
       </div>
-      <div className="shrink-0 pt-0.5">{children}</div>
+      <div className="shrink-0">{children}</div>
     </div>
   )
 }
@@ -134,7 +133,6 @@ export function GithubDocsAutomationSettings({
         <div className="divide-y rounded-lg border">
           <SettingRow
             title="Pull request merge method"
-            description="How Breezify merges its publish pull request when you choose Merge pull request."
             note={
               publishMode === "direct"
                 ? "Only used when publishing opens a pull request."
@@ -178,7 +176,6 @@ export function GithubDocsAutomationSettings({
           </SettingRow>
           <SettingRow
             title="Create draft pull requests"
-            description="Open publish pull requests as drafts. Merging from Breezify marks the pull request ready first."
             note={
               publishMode === "direct"
                 ? "Only used when publishing opens a pull request."

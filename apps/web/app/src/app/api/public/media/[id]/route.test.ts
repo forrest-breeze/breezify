@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const { mockIsDocInScope } = vi.hoisted(() => ({
+const { mockIsDocInScope, mockNonPublicFolderIds } = vi.hoisted(() => ({
   mockIsDocInScope: vi.fn(),
+  mockNonPublicFolderIds: vi.fn(async () => new Set<string>()),
 }))
 
 vi.mock("@/lib/public-kb", () => ({
+  getNonPublicFolderIds: mockNonPublicFolderIds,
   isDocInScope: mockIsDocInScope,
 }))
 
@@ -45,7 +47,7 @@ function query(
 }
 
 function adminFor(input: {
-  documents: Array<{ id: string; folder_id: string | null }>
+  documents: Array<{ id: string; folder_id: string | null; readme_hidden?: boolean }>
   folders?: Array<{ id: string }>
   projects?: Array<{ scope: unknown; spec?: unknown }>
 }) {
@@ -159,6 +161,29 @@ describe("public S3 media authorization", () => {
       ),
     ).resolves.toBe(false)
     expect(admin.from).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not serve media referenced only by a page hidden in its repository", async () => {
+    const admin = adminFor({
+      documents: [{ id: "doc-hidden", folder_id: "folder-1", readme_hidden: true }],
+      folders: [{ id: "folder-1" }],
+    })
+
+    await expect(
+      publiclyReferencesMedia(admin as any, "workspace-1", "media-1", true),
+    ).resolves.toBe(false)
+  })
+
+  it("does not serve media referenced only from a folder beneath a members-only folder", async () => {
+    mockNonPublicFolderIds.mockResolvedValueOnce(new Set(["folder-offramp"]))
+    const admin = adminFor({
+      documents: [{ id: "doc-offramp", folder_id: "folder-offramp" }],
+      folders: [{ id: "folder-offramp" }],
+    })
+
+    await expect(
+      publiclyReferencesMedia(admin as any, "workspace-1", "media-1", true),
+    ).resolves.toBe(false)
   })
 
   it("rejects documents in hidden folders before evaluating project scope", async () => {

@@ -30,7 +30,6 @@ import { publicPortalApiPath, publicPortalHref } from "@/lib/portal/public-base-
 interface PortalSearchProps {
   slug: string
   hrefBase?: string
-  placeholder: string
   askAiEnabled: boolean
   variant?: "header" | "block" | "help"
   globalShortcut?: boolean
@@ -43,31 +42,21 @@ interface PortalSearchProps {
 
 type PortalSearchMode = "dropdown" | "modal"
 
-// Stock placeholders that promise an AI answer. When the assistant is off we
-// swap these for a plain search prompt at render time; the stored value is left
-// alone so re-enabling the assistant restores it. Custom copy is never touched.
-const AI_DEFAULT_PLACEHOLDERS = new Set([
-  "Search or ask AI",
-  "Ask, search, or explain…",
-  "Ask, search, or explain...",
-])
-const PLAIN_SEARCH_PLACEHOLDER = "Search"
-
-export function resolveSearchPlaceholder(placeholder: string, askAiEnabled: boolean): string {
-  if (askAiEnabled) return placeholder
-  return AI_DEFAULT_PLACEHOLDERS.has(placeholder.trim()) ? PLAIN_SEARCH_PLACEHOLDER : placeholder
+// The placeholder isn't editable: it follows whether Ask AI is live on the
+// portal, so the bar never promises an AI answer the portal can't give.
+function searchPlaceholder(askAiEnabled: boolean): string {
+  return askAiEnabled ? "Search or ask AI" : "Search"
 }
 
 export function PortalSearch({
   slug,
   hrefBase,
-  placeholder: rawPlaceholder,
   askAiEnabled,
   variant = "header",
   globalShortcut,
   onNavigate,
 }: PortalSearchProps): React.ReactElement {
-  const placeholder = resolveSearchPlaceholder(rawPlaceholder, askAiEnabled)
+  const placeholder = searchPlaceholder(askAiEnabled)
   const [mode, setMode] = useState<PortalSearchMode | null>(null)
   const [modalTarget, setModalTarget] = useState<HTMLElement | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -128,7 +117,7 @@ export function PortalSearch({
       <button
         type="button"
         onClick={openSearch}
-        aria-label="Search the knowledge base"
+        aria-label="Search the documentation"
         aria-expanded={mode !== null}
         aria-haspopup="dialog"
         className={cn(
@@ -155,7 +144,9 @@ export function PortalSearch({
           {placeholder}
         </span>
         {isHeader ? (
-          <span className="hidden shrink-0 items-center gap-1 text-[11px] text-muted-foreground/60 2xl:flex">
+          // Shown wherever the header search is a full bar on a keyboard-sized
+          // screen (xl+); between md and xl the search collapses to an icon.
+          <span className="hidden shrink-0 items-center gap-1 text-[11px] text-muted-foreground/60 xl:flex">
             <kbd className="grid size-7 place-items-center rounded-lg border border-border bg-background">
               ⌘
             </kbd>
@@ -346,7 +337,7 @@ function PortalSearchPopout({
         ref={containerRef}
         role={isModal ? "dialog" : "region"}
         aria-modal={isModal ? true : undefined}
-        aria-label="Search the knowledge base"
+        aria-label="Search the documentation"
         className={cn(
           "w-full overflow-hidden rounded-xl border border-border bg-background",
           isModal ? "max-w-lg shadow-2xl" : "shadow-xl",
@@ -362,7 +353,7 @@ function PortalSearchPopout({
             onChange={(e) => handleChange(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder={placeholder}
-            aria-label="Search the knowledge base"
+            aria-label="Search the documentation"
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
           />
           {loading && (
@@ -388,8 +379,8 @@ function PortalSearchPopout({
           {!hasQuery && (
             <p className="px-4 py-8 text-center text-sm text-muted-foreground">
               {askAiEnabled
-                ? "Search the knowledge base, or ask a question."
-                : "Search the knowledge base."}
+                ? "Search the documentation, or ask a question."
+                : "Search the documentation."}
             </p>
           )}
 

@@ -179,7 +179,6 @@ export function PortalHeader({
             <PortalSearch
               slug={slug}
               hrefBase={publicBase}
-              placeholder={header.search.placeholder}
               askAiEnabled={askAiEnabled}
               onNavigate={onNavigate}
               globalShortcut={onNavigate ? false : undefined}

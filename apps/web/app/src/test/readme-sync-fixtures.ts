@@ -405,7 +405,24 @@ export class MemoryReadmeStore implements ReadmeStore {
     Object.assign(this.folders.get(id)!, patch)
   }
 
-  async deleteFolder(id: string): Promise<void> {
+  async deleteFolderIfEmpty(id: string): Promise<boolean> {
+    const filed = [...this.documents.values()].filter((document) => document.folderId === id)
+    if (filed.some((document) => !document.deleted)) return false
+    if ([...this.folders.values()].some((folder) => folder.parentId === id)) return false
+    // Trashed documents survive the folder, unfiled.
+    for (const document of filed) document.folderId = null
+    this.removeFolderRow(id)
+    return true
+  }
+
+  /**
+   * Faithful to `documents_folder_id_fkey` (ON DELETE CASCADE): every document
+   * still filed in a deleted folder is deleted with it, trashed ones included.
+   */
+  private removeFolderRow(id: string): void {
+    for (const [documentId, document] of this.documents) {
+      if (document.folderId === id) this.documents.delete(documentId)
+    }
     this.folders.delete(id)
   }
 

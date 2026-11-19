@@ -939,6 +939,26 @@ export function DocumentEditor({ documentId }: DocumentEditorProps): React.React
     void doSave()
   }, [doSave])
 
+  // Closing the portal builder's in-frame editor shows this document rendered
+  // from the server, so let pending edits land first or the render would
+  // miss them. (Unmounting would save them too, but in a race with that render.)
+  const [closingPortalEditor, setClosingPortalEditor] = useState(false)
+  const closePortalEditor = useCallback(async (): Promise<void> => {
+    if (!exitPortalEditor) return
+    if ((dirtyRef.current || savingRef.current) && !deletedRef.current) {
+      setClosingPortalEditor(true)
+      if (timerRef.current) clearTimeout(timerRef.current)
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
+      // A failed save still closes: the recovery draft and the unmount save
+      // keep the edits, as when leaving any other way.
+      await doSave()
+    }
+    exitPortalEditor()
+  }, [doSave, exitPortalEditor])
+
   // Keyboard shortcut: Cmd/Ctrl+S
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -1521,8 +1541,9 @@ export function DocumentEditor({ documentId }: DocumentEditorProps): React.React
                 <button
                   type="button"
                   title="Close editor"
-                  onClick={exitPortalEditor}
-                  className="inline-flex h-9 shrink-0 items-center justify-center px-1 text-sm font-medium text-red-500 transition-colors hover:text-red-600 dark:hover:text-red-400"
+                  onClick={() => void closePortalEditor()}
+                  disabled={closingPortalEditor}
+                  className="inline-flex h-9 shrink-0 items-center justify-center px-1 text-sm font-medium text-red-500 transition-colors hover:text-red-600 disabled:opacity-60 dark:hover:text-red-400"
                 >
                   Cancel
                 </button>
@@ -1561,7 +1582,10 @@ export function DocumentEditor({ documentId }: DocumentEditorProps): React.React
                   onUpdate={handleContentChange}
                   onNormalize={handleContentNormalize}
                   onJSONUpdate={handleJSONUpdate}
-                  autoFocus
+                  // In the portal builder's preview the document reads like
+                  // the published page until clicked, so don't drop a caret
+                  // into it on open.
+                  autoFocus={!exitPortalEditor}
                   editable={
                     !isDeleted &&
                     canEditGitHubDocument &&

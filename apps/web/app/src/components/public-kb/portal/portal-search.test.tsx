@@ -27,16 +27,15 @@ describe("PortalSearch", () => {
       <div data-portal-root className="dark">
         <PortalSearch
           slug="acme"
-          placeholder="Search Acme"
           askAiEnabled={false}
         />
       </div>,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Search the knowledge base" }))
+    fireEvent.click(screen.getByRole("button", { name: "Search the documentation" }))
 
     const portalRoot = container.querySelector<HTMLElement>("[data-portal-root]")
-    const dialog = screen.getByRole("dialog", { name: "Search the knowledge base" })
+    const dialog = screen.getByRole("dialog", { name: "Search the documentation" })
     expect(dialog.closest("[data-portal-root]")).toBe(portalRoot)
     matchMedia.mockRestore()
   })
@@ -46,7 +45,6 @@ describe("PortalSearch", () => {
       <div data-portal-root className="dark" style={{ "--portal-accent": "#123456" } as React.CSSProperties}>
         <PortalSearch
           slug="acme"
-          placeholder="Search Acme"
           askAiEnabled={false}
           globalShortcut
         />
@@ -56,7 +54,7 @@ describe("PortalSearch", () => {
     fireEvent.keyDown(document, { key: "k", metaKey: true })
 
     const portalRoot = container.querySelector<HTMLElement>("[data-portal-root]")
-    const dialog = screen.getByRole("dialog", { name: "Search the knowledge base" })
+    const dialog = screen.getByRole("dialog", { name: "Search the documentation" })
 
     expect(portalRoot).not.toBeNull()
     expect(dialog.closest("[data-portal-root]")).toBe(portalRoot)

@@ -4,6 +4,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  notifyWorkspaceDocumentSaved,
   PREPARE_WORKSPACE_PUBLISH_EVENT,
   type PrepareWorkspacePublishEventDetail,
 } from "@/lib/workspace-publish-events"
@@ -426,5 +427,25 @@ describe("WorkspaceGitHubPublish", () => {
     expect(
       screen.queryByRole("button", { name: "Publish workspace" }),
     ).not.toBeInTheDocument()
+  })
+
+  it("re-checks GitHub when a document is saved", () => {
+    const view = render(<WorkspaceGitHubPublish />)
+    expect(harness.mutatePublishStatus).not.toHaveBeenCalled()
+
+    act(() => {
+      notifyWorkspaceDocumentSaved({
+        documentId: "doc-1",
+        savedAt: "2026-11-19T12:00:00.000Z",
+      })
+    })
+    expect(harness.mutatePublishStatus).toHaveBeenCalledTimes(1)
+
+    view.unmount()
+    notifyWorkspaceDocumentSaved({
+      documentId: "doc-1",
+      savedAt: "2026-11-19T12:00:05.000Z",
+    })
+    expect(harness.mutatePublishStatus).toHaveBeenCalledTimes(1)
   })
 })

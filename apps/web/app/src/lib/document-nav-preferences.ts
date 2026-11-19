@@ -76,6 +76,36 @@ export function setStoredOpenFolderIds(ids: Set<string>): void {
   window.localStorage.setItem(OPEN_FOLDERS_STORAGE_KEY, JSON.stringify([...ids]))
 }
 
+// The editor tree's page roots start open, so the stored set is the collapsed
+// ones (keys from lib/editor-page-roots).
+const COLLAPSED_PAGE_ROOTS_STORAGE_KEY = "breezify-doc-nav-collapsed-page-roots"
+
+export function getStoredCollapsedPageRoots(): Set<string> {
+  if (typeof window === "undefined") return new Set()
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_PAGE_ROOTS_STORAGE_KEY)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((v): v is string => typeof v === "string"))
+      : new Set()
+  } catch {
+    return new Set()
+  }
+}
+
+export function setStoredCollapsedPageRoots(keys: Set<string>): void {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(
+      COLLAPSED_PAGE_ROOTS_STORAGE_KEY,
+      JSON.stringify([...keys]),
+    )
+  } catch {
+    // Storage full or blocked: the roots just reopen next time.
+  }
+}
+
 /**
  * Clears the persisted open-folder set. Folder ids reveal another user's
  * workspace structure, so this is wiped on logout / user switch alongside the
@@ -85,6 +115,7 @@ export function clearStoredOpenFolderIds(): void {
   if (typeof window === "undefined") return
   try {
     window.localStorage.removeItem(OPEN_FOLDERS_STORAGE_KEY)
+    window.localStorage.removeItem(COLLAPSED_PAGE_ROOTS_STORAGE_KEY)
   } catch {
     // ignore
   }
