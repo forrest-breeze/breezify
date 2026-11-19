@@ -38,6 +38,11 @@ import {
   initiateGithubInstall,
   saveGithubHostedDocsSource,
 } from "@/lib/github/api/github-integrations"
+import { GithubBranchPicker } from "@/components/app/github-branch-picker"
+import {
+  GithubDocsAutomationSettings,
+  MergePublishPullRequestButton,
+} from "@/components/settings/github-docs-automation"
 
 // ---------------------------------------------------------------------------
 // Settings -> Integrations -> GitHub.
@@ -324,6 +329,7 @@ function LinkedSource({
               </span>
               <span className="font-mono">/{root}</span>
             </p>
+            <GithubBranchPicker className="mt-1" />
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
             {source.sync_status === "synced" ? (
@@ -383,16 +389,25 @@ function LinkedSource({
           </p>
         ) : null}
         {source.publish_pull_request_url ? (
-          <a
-            href={source.publish_pull_request_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium hover:underline"
-          >
-            Open publish pull request
-            {source.publish_pull_request_number ? ` #${source.publish_pull_request_number}` : ""}
-            <ExternalLink className="size-3.5" aria-hidden="true" />
-          </a>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <a
+              href={source.publish_pull_request_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-sm font-medium hover:underline"
+            >
+              Open publish pull request
+              {source.publish_pull_request_number ? ` #${source.publish_pull_request_number}` : ""}
+              <ExternalLink className="size-3.5" aria-hidden="true" />
+            </a>
+            {canManage ? (
+              <MergePublishPullRequestButton
+                pullRequestNumber={source.publish_pull_request_number}
+                disabled={pending !== null || syncing}
+                onMerged={refresh}
+              />
+            ) : null}
+          </div>
         ) : null}
       </div>
 
@@ -439,6 +454,8 @@ function LinkedSource({
               }}
             />
           </div>
+
+          <GithubDocsAutomationSettings publishMode={publishMode} disabled={pending !== null} />
 
           {error ? (
             <p role="alert" className="text-sm text-destructive">

@@ -25,6 +25,7 @@ import {
   publishHostedWorkspaceToGitHub,
 } from '@/lib/github/github-hosted-workspace-publish'
 import { listInstallationRepos } from '@/lib/github/github'
+import { autoPublishRefusal } from '@/lib/github/docs-automation.server'
 import { ReadmePublishError } from '@/lib/github/readme/readme-publish'
 import {
   inspectReadmeSourcePublish,
@@ -102,6 +103,9 @@ function hasActivePublishLease(source: GitHubHostedDocsSourceRow): boolean {
 const bodySchema = z
   .object({
     conflict_resolution: z.literal('breezify').optional(),
+    // Set by the client's auto-publish timer; the server decides whether an
+    // unattended publish is allowed and whether editing has really stopped.
+    auto: z.literal(true).optional(),
     paths: z
       .array(z.string().trim().min(1).max(1024))
       .min(1)
@@ -488,6 +492,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         },
         { status: 409 },
       )
+    }
+
+    if (parsedBody.data.auto) {
+      if (
+        !isReadmeFormatSource(source) ||
+        parsedBody.data.conflict_resolution ||
+        parsedBody.data.paths
+      ) {
+        return NextResponse.json(
+          {
+            error: 'Auto publish is not available for this request.',
+            code: 'auto_publish_unsupported',
+          },
+          { status: 409 },
+        )
+      }
+      const refusal = await autoPublishRefusal(admin, source)
+      if (refusal) return NextResponse.json(refusal, { status: 409 })
     }
 
     if (isReadmeFormatSource(source)) {

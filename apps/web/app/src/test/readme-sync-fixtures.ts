@@ -39,7 +39,10 @@ export class FakeRepository {
     base: string
     state: 'open' | 'closed'
     merged: boolean
+    draft: boolean
   }> = []
+  /** Set to make the repository reject draft pull requests, as some plans do. */
+  draftsUnsupported = false
   blobReads: string[] = []
   private readonly commits = new Map<string, FakeCommit>()
   private readonly trees = new Map<string, Map<string, string>>()
@@ -194,6 +197,12 @@ export class FakeRepository {
         return { sha: commitSha, html_url: `https://github.test/${this.fullName}/commit/${commitSha}` }
       },
       createPullRequest: async (_token, _repo, args) => {
+        if (args.draft && this.draftsUnsupported) {
+          throw new GitHubApiError(
+            'GitHub API responded 422: Draft pull requests are not supported in this repository.',
+            422,
+          )
+        }
         const number = this.pullRequests.length + 1
         this.pullRequests.push({
           number,
@@ -201,6 +210,7 @@ export class FakeRepository {
           base: args.base,
           state: 'open',
           merged: false,
+          draft: args.draft === true,
         })
         return {
           number,

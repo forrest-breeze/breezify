@@ -1,4 +1,5 @@
 import type { IngestionApprovalMode, WorkspaceSettings } from "@breezify/core";
+import { normalizeDocsAutomationSettings } from "@/lib/github/docs-automation-settings";
 import {
   parseStoredFooter,
   parseStoredHeader,
@@ -444,5 +445,6 @@ export function normalizeWorkspaceSettings(
   const landingPageUrl = normalizeLandingPageUrl(normalized.landing_page_url);
   if (landingPageUrl) normalized.landing_page_url = landingPageUrl;
   else delete normalized.landing_page_url;
+  normalizeDocsAutomationSettings(normalized as Record<string, unknown>);
   return normalized;
 }

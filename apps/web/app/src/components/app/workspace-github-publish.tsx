@@ -15,6 +15,8 @@ import {
   useWorkspace,
 } from "@/hooks/swr"
 import { saveActiveDocumentBeforeWorkspacePublish } from "@/lib/workspace-publish-events"
+import { useGithubAutoPublish } from "@/hooks/use-github-auto-publish"
+import { getGithubPublishingSettings } from "@/lib/github/docs-automation-settings"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { LoadingBar } from "@/components/ui/loading-bar"
 import { cn } from "@/lib/utils"
@@ -119,6 +121,24 @@ export function WorkspaceGitHubPublish(): React.ReactElement | null {
     exactStatusUpToDate,
     upToDateKey,
   ])
+
+  // Auto publish (Settings -> Integrations -> GitHub): once editing stops, ask
+  // the server to commit. Only for direct commits with no conflict waiting.
+  const autoPublishEnabled = Boolean(
+    canPublish &&
+      sourceReady &&
+      directCommit &&
+      (source?.conflict_count ?? 0) === 0 &&
+      getGithubPublishingSettings(workspace?.settings).autoPublish,
+  )
+  const changesPending = publishStatus?.status === "changes"
+  const { autoPublishing, autoPublishError } = useGithubAutoPublish({
+    enabled: autoPublishEnabled,
+    pending: changesPending,
+    changeKey:
+      publishStatus?.comparison_key ?? publishStatus?.compared_commit_sha ?? "",
+    onPublished: () => Promise.all([mutate(), mutatePublishStatus()]),
+  })
 
   useEffect(() => {
     if (publishStatus?.status !== "sync_required") return
@@ -370,6 +390,18 @@ export function WorkspaceGitHubPublish(): React.ReactElement | null {
           className="px-1 pt-0.5 text-[11px] leading-4 text-muted-foreground"
         >
           {disabledReason}
+        </p>
+      ) : null}
+
+      {autoPublishEnabled && changesPending ? (
+        <p
+          className="px-1 pt-0.5 text-[11px] leading-4 text-muted-foreground"
+          aria-live="polite"
+        >
+          {autoPublishError ??
+            (autoPublishing
+              ? "Publishing automatically…"
+              : "Auto publish is on. Changes are committed once editing stops.")}
         </p>
       ) : null}
 

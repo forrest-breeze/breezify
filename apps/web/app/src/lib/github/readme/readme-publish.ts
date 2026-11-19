@@ -57,6 +57,14 @@ export interface ReadmePublishSource {
   publishMode: ReadmePublishMode
   publishPullRequestNumber: number | null
   publishPullRequestHead: string | null
+  /** Open a new publish pull request as a draft. */
+  draftPullRequests?: boolean
+}
+
+/** Someone credited on a commit with a `Co-authored-by` trailer. */
+export interface CommitCoAuthor {
+  name: string
+  email: string
 }
 
 export interface ReadmePublishDeps {
@@ -466,6 +474,26 @@ export interface ReadmePublishResult {
   deletedFileCount: number
 }
 
+/**
+ * `Co-authored-by` trailers, one per person. Names and emails come from
+ * profiles, so anything that could break out of the trailer line is dropped.
+ */
+export function coAuthorTrailers(coAuthors: readonly CommitCoAuthor[]): string[] {
+  const seen = new Set<string>()
+  const trailers: string[] = []
+  for (const coAuthor of coAuthors) {
+    const email = coAuthor.email.trim()
+    if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) continue
+    const key = email.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const name =
+      coAuthor.name.replace(/[\r\n<>]+/g, ' ').replace(/\s+/g, ' ').trim() || email.split('@')[0]!
+    trailers.push(`Co-authored-by: ${name} <${email}>`)
+  }
+  return trailers
+}
+
 function commitMessage(plan: ReadmeExportPlan, message: string | undefined): string {
   const paths = [...plan.writes.map((write) => write.path), ...plan.deletes]
   const subject =
@@ -547,6 +575,7 @@ async function recordPublishedPlan(
         readme_hidden: result.hidden,
         readme_frontmatter: result.frontmatter,
         readme_frontmatter_raw: result.frontmatterRaw,
+        readme_synced_at: new Date().toISOString(),
         repo_id: source.repoId,
         repo_full_name: source.repoFullName,
         ref: branch,
@@ -603,6 +632,11 @@ export async function publishReadmeWorkspace(
     includeConflicts?: boolean
     selectedPaths?: string[]
     message?: string
+    /**
+     * People to credit on the commit, given the documents it writes. Looked up
+     * only once there is something to commit.
+     */
+    coAuthors?: (documentIds: string[]) => Promise<CommitCoAuthor[]>
   } = {},
 ): Promise<ReadmePublishResult> {
   const github = resolveDeps(deps)
@@ -616,7 +650,17 @@ export async function publishReadmeWorkspace(
       'no_changes',
     )
   }
-  const message = commitMessage(plan, options.message)
+  const trailers = options.coAuthors
+    ? coAuthorTrailers(
+        await options.coAuthors(
+          plan.documents.filter((document) => document.written).map((document) => document.id),
+        ),
+      )
+    : []
+  const message =
+    trailers.length > 0
+      ? `${commitMessage(plan, options.message)}\n\n${trailers.join('\n')}`
+      : commitMessage(plan, options.message)
 
   if (source.publishMode === 'direct') {
     const commit = await github
@@ -664,23 +708,39 @@ export async function publishReadmeWorkspace(
       }),
     )
     .catch((error: unknown) => mapCommitError(error, prBranch))
+  const pullRequestArgs = {
+    head: prBranch,
+    base: branch,
+    title: 'docs: sync from Breezify',
+    body: [
+      'Publishes the current Breezify workspace to this repository.',
+      '',
+      `${plan.writes.length} file${plan.writes.length === 1 ? '' : 's'} written; ${plan.deletes.length} deleted.`,
+      '',
+      'Merge this pull request to make the changes live. Breezify picks the merge up automatically.',
+    ].join('\n'),
+  }
+  const createPullRequest = (draft: boolean) =>
+    github.retry(() =>
+      github.createPullRequest(token, source.repoFullName, {
+        ...pullRequestArgs,
+        ...(draft ? { draft: true } : {}),
+      }),
+    )
   const pullRequest: { number: number; url: string; branch: string } =
     comparison.pullRequest ??
-    (await github
-      .retry(() =>
-        github.createPullRequest(token, source.repoFullName, {
-          head: prBranch,
-          base: branch,
-          title: 'docs: sync from Breezify',
-          body: [
-            'Publishes the current Breezify workspace to this repository.',
-            '',
-            `${plan.writes.length} file${plan.writes.length === 1 ? '' : 's'} written; ${plan.deletes.length} deleted.`,
-            '',
-            'Merge this pull request to make the changes live. Breezify picks the merge up automatically.',
-          ].join('\n'),
-        }),
-      )
+    (await createPullRequest(source.draftPullRequests === true)
+      .catch((error: unknown) => {
+        // Some repositories (private ones on plans without drafts) reject a
+        // draft outright. The publish still has to land, so open it normally.
+        const draftUnsupported =
+          source.draftPullRequests === true &&
+          error instanceof GitHubApiError &&
+          error.status === 422 &&
+          /draft/i.test(error.message)
+        if (!draftUnsupported) throw error
+        return createPullRequest(false)
+      })
       .then((created) => ({ number: created.number, url: created.html_url, branch: prBranch })))
 
   // Until the pull request merges nothing is linked. Remember where each new

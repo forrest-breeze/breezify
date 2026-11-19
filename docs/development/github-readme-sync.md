@@ -93,6 +93,32 @@ page beneath them, since Git has no empty directories.
 
 Publishing is refused while GitHub has commits Breezify has not pulled yet.
 
+## Publishing options and checks
+
+Workspace admins set these under Settings -> Integrations -> GitHub. They are
+stored in `workspaces.settings` (`github_publishing`, `docs_checks`) and are all
+off by default. See `src/lib/github/docs-automation-settings.ts`.
+
+- **Pull request merge method** (merge, squash, rebase): used by "Merge pull
+  request", which merges the open publish pull request from Breezify
+  (`POST /api/github/hosted-docs/publish/merge`, owners and admins). A draft is
+  marked ready first. GitHub still enforces required checks and reviews.
+- **Auto publish**: with direct commits, the publish control asks the server to
+  commit about 45 seconds after editing stops. The server refuses unless the
+  setting is on, the link commits directly, no conflict is open, and nothing in
+  the workspace was edited in that window. It needs someone to have the
+  workspace open; there is no background job.
+- **Create draft pull requests**: new publish pull requests open as drafts.
+  Repositories that do not support drafts get a normal pull request.
+- **Add co-authors to commits**: adds a `Co-authored-by` trailer for everyone
+  who edited a published page since it last matched the repository (from
+  `document_versions.edited_by`).
+- **Broken links** (disabled, warning, blocking): a "Docs links" check run on
+  every commit GitHub requests checks for, which covers pull requests. It
+  checks links between pages (slugs, `/docs/<slug>`, `doc:<slug>`) and to files
+  in the repository. External URLs are not fetched. Warning concludes
+  `neutral`; blocking concludes `failure`. See `src/lib/github/docs-link-check.ts`.
+
 ## OpenAPI
 
 Definitions in `reference/` (JSON or YAML) go through the same source sync as

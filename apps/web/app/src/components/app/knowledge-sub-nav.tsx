@@ -6,6 +6,7 @@ import { FileText, GitCompareArrows } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { LoadingBar } from "@/components/ui/loading-bar"
 import { DocumentsSubNav } from "@/components/app/documents-sub-nav"
+import { GithubBranchPicker } from "@/components/app/github-branch-picker"
 import { WorkspaceChangesCommitPanel } from "@/components/app/workspace-changes-commit-panel"
 import { WorkspaceChangesFileList } from "@/components/app/workspace-changes-file-list"
 import { useWorkspaceChanges } from "@/components/app/workspace-changes-context"
@@ -49,6 +50,8 @@ export function KnowledgeSubNav({
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
       <div className="shrink-0 border-b border-border pb-2">
+        {/* Renders nothing unless a docs repository is linked. */}
+        <GithubBranchPicker className="mb-2" />
         <div
           role="tablist"
           aria-label="Knowledge views"

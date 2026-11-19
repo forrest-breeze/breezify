@@ -72,7 +72,12 @@ function readmeRepositoryFiles(): Record<string, string> {
 
 function harness(
   files: Record<string, string> = readmeRepositoryFiles(),
-  options: { publishMode?: ReadmePublishMode; root?: string; branch?: string | null } = {},
+  options: {
+    publishMode?: ReadmePublishMode
+    root?: string
+    branch?: string | null
+    draftPullRequests?: boolean
+  } = {},
 ) {
   const repo = new FakeRepository(files)
   const store = new MemoryReadmeStore(repo.id)
@@ -92,6 +97,7 @@ function harness(
     publishMode: options.publishMode ?? 'direct',
     publishPullRequestNumber: (store.source.publish_pull_request_number as number | undefined) ?? null,
     publishPullRequestHead: (store.source.publish_pull_request_head as string | undefined) ?? null,
+    draftPullRequests: options.draftPullRequests,
   })
   return {
     repo,
@@ -741,6 +747,62 @@ describe('ReadMe-format GitHub sync: pull request mode', () => {
       github_hosted_pending_path: null,
     })
     expect(store.snapshots).toEqual([])
+  })
+})
+
+describe('ReadMe-format GitHub sync: publishing options', () => {
+  it('opens the publish pull request as a draft when asked to', async () => {
+    const { repo, store, sync, publish } = harness(readmeRepositoryFiles(), {
+      publishMode: 'pull_request',
+      draftPullRequests: true,
+    })
+    await sync()
+    store.document('API keys').content = 'Edited in Breezify.'
+    await publish()
+    expect(repo.pullRequests).toEqual([expect.objectContaining({ number: 1, draft: true })])
+  })
+
+  it('opens a normal pull request where the repository does not allow drafts', async () => {
+    const { repo, store, sync, publish } = harness(readmeRepositoryFiles(), {
+      publishMode: 'pull_request',
+      draftPullRequests: true,
+    })
+    repo.draftsUnsupported = true
+    await sync()
+    store.document('API keys').content = 'Edited in Breezify.'
+    const result = await publish()
+    expect(result.pullRequestNumber).toBe(1)
+    expect(repo.pullRequests).toEqual([expect.objectContaining({ number: 1, draft: false })])
+  })
+
+  it('credits the editors of the published pages as commit co-authors', async () => {
+    const { repo, store, sync, publish } = harness()
+    await sync()
+    const edited = store.document('API keys')
+    edited.content = 'Edited in Breezify.'
+    const asked: string[][] = []
+    await publish({
+      coAuthors: async (documentIds) => {
+        asked.push(documentIds)
+        return [
+          { name: 'Ada Lovelace', email: 'ada@breeze.test' },
+          // The same person twice, a broken address and a hostile name.
+          { name: 'Ada L.', email: 'ADA@breeze.test' },
+          { name: 'Nobody', email: 'not-an-email' },
+          { name: 'Grace <script>\nHopper', email: 'grace@breeze.test' },
+        ]
+      },
+    })
+    // Only the documents this commit writes are looked up.
+    expect(asked).toEqual([[edited.id]])
+    expect(repo.lastMessage()).toBe(
+      [
+        'docs: update docs/getting-started/authentication/api-keys.md from Breezify',
+        '',
+        'Co-authored-by: Ada Lovelace <ada@breeze.test>',
+        'Co-authored-by: Grace script Hopper <grace@breeze.test>',
+      ].join('\n'),
+    )
   })
 })
 

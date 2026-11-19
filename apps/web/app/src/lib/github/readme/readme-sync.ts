@@ -216,6 +216,9 @@ function documentMetadata(input: {
     readme_hidden: page.hidden,
     readme_frontmatter: page.frontmatter,
     readme_frontmatter_raw: page.frontmatterRaw,
+    // When the page last matched the repository; edits after it are what the
+    // next publish writes (used to credit their authors).
+    readme_synced_at: new Date().toISOString(),
     ...(page.date ? { published_date: page.date } : {}),
     repo_id: input.target.repoId,
     repo_full_name: input.target.repoFullName,

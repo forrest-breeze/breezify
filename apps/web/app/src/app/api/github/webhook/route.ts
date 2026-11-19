@@ -9,6 +9,8 @@ import {
   extractGitHubDocsCheckInfo,
   handleGitHubDocsCheck,
 } from '@/lib/github/github-docs-check'
+import { extractDocsLinkCheckInfo } from '@/lib/github/docs-link-check'
+import { handleDocsLinkCheck } from '@/lib/github/docs-link-check.server'
 import { getTokenCache } from '@/lib/github/token-cache-factory'
 import { markGitHubDocumentPullRequestState } from '@/lib/github/github-document-sync'
 import { recordWebhookDelivery } from '@/lib/api/webhook-dedup'
@@ -68,6 +70,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const eventType = request.headers.get('x-github-event') ?? ''
   const pushInfo = extractRepositoryPushInfo(eventType, payload)
   const docsCheckInfo = extractGitHubDocsCheckInfo(eventType, payload)
+  const linkCheckInfo = extractDocsLinkCheckInfo(eventType, payload)
   // A ReadMe-format docs link can follow a branch other than the default.
   const branchPushInfo = pushInfo ? null : extractHostedBranchPush(eventType, payload)
   const installationTokenScopeChanged =
@@ -87,6 +90,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     !pushInfo &&
     !branchPushInfo &&
     !docsCheckInfo &&
+    !linkCheckInfo &&
     !tokenScopeInstallationId
   ) {
     // Not an event we care about — acknowledge and exit.
@@ -112,6 +116,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Start the check immediately. If another handler on the same delivery is
     // slow, it must not consume the serverless window before the required
     // status is created and completed.
+    // Broken links between docs pages, for ReadMe-format links that turned the
+    // check on. Independent of the format check above: one failing must not
+    // stop the other from reporting.
+    const linkCheckTask = linkCheckInfo
+      ? handleDocsLinkCheck(linkCheckInfo).catch((err) => {
+          logWebhookFailure('[Breezify] GitHub docs link check failed:', err)
+        })
+      : Promise.resolve()
     const docsCheckTask = docsCheckInfo
       ? handleGitHubDocsCheck(docsCheckInfo).catch((err) => {
           // Attach the rejection handler immediately. Another handler may still
@@ -137,7 +149,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       logWebhookFailure('[Breezify] GitHub webhook handler failed:', err)
     }
 
-    await docsCheckTask
+    await Promise.all([docsCheckTask, linkCheckTask])
   })
 
   return NextResponse.json({ ok: true })

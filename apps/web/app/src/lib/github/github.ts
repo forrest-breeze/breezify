@@ -53,7 +53,11 @@ export interface GitHubPR {
   merged: boolean
   merged_at?: string | null
   merge_commit_sha?: string | null
-  head?: { ref: string }
+  head?: { ref: string; sha?: string }
+  /** True while the pull request is a draft, which GitHub refuses to merge. */
+  draft?: boolean
+  /** GraphQL id, needed to take a pull request out of draft. */
+  node_id?: string
   user: GitHubUser | null
   created_at: string
   updated_at: string
@@ -885,6 +889,8 @@ export async function createRepositoryPullRequest(
     base: string
     title: string
     body: string
+    /** Open the pull request as a draft. */
+    draft?: boolean
   },
 ): Promise<GitHubCreatedPullRequest> {
   const url = `${GITHUB_API}/repos/${repoFullName}/pulls`
@@ -1148,6 +1154,173 @@ export async function getPullRequest(
   }
 
   return (await res.json()) as GitHubPR
+}
+
+export interface GitHubBranchSummary {
+  name: string
+  /** Date of the branch's latest commit. */
+  updatedAt: string | null
+  /** Git author name of that commit, or the GitHub login when it has none. */
+  author: string | null
+}
+
+const BRANCH_LIST_PAGE_SIZE = 100
+const BRANCH_LIST_MAX_PAGES = 5
+
+/**
+ * Every branch of a repository with who last committed to it and when. The
+ * REST branch list carries neither, and asking per branch would be one request
+ * each, so this is a single paged GraphQL query. `truncated` is set when the
+ * repository has more branches than are read.
+ */
+export async function listRepositoryBranches(
+  token: string,
+  repoFullName: string,
+): Promise<{ defaultBranch: string | null; branches: GitHubBranchSummary[]; truncated: boolean }> {
+  const [owner, name] = repoFullName.split('/')
+  const url = `${GITHUB_API}/graphql`
+  const branches: GitHubBranchSummary[] = []
+  let defaultBranch: string | null = null
+  let after: string | null = null
+  for (let page = 0; page < BRANCH_LIST_MAX_PAGES; page++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...repositoryHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: `query($owner: String!, $name: String!, $first: Int!, $after: String) {
+          repository(owner: $owner, name: $name) {
+            defaultBranchRef { name }
+            refs(refPrefix: "refs/heads/", first: $first, after: $after) {
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                name
+                target { ... on Commit { committedDate author { name user { login } } } }
+              }
+            }
+          }
+        }`,
+        variables: { owner, name, first: BRANCH_LIST_PAGE_SIZE, after },
+      }),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) {
+      const body = await readErrorBody(res)
+      throw new GitHubApiError(
+        `GitHub API responded ${res.status} for ${url}${body ? `: ${body}` : ''}`,
+        res.status,
+      )
+    }
+    const result = (await res.json()) as {
+      errors?: Array<{ message?: string; type?: string }>
+      data?: {
+        repository: {
+          defaultBranchRef: { name: string } | null
+          refs: {
+            pageInfo: { hasNextPage: boolean; endCursor: string | null }
+            nodes: Array<{
+              name: string
+              target: {
+                committedDate?: string
+                author?: { name: string | null; user: { login: string } | null } | null
+              } | null
+            }>
+          }
+        } | null
+      }
+    }
+    const repository = result.data?.repository
+    if (result.errors?.length || !repository) {
+      const notFound = result.errors?.some((error) => error.type === 'NOT_FOUND') || !repository
+      throw new GitHubApiError(
+        `GitHub could not list the branches of ${repoFullName}: ${result.errors?.[0]?.message ?? 'repository not found'}`,
+        notFound ? 404 : 502,
+      )
+    }
+    defaultBranch = repository.defaultBranchRef?.name ?? null
+    for (const node of repository.refs.nodes) {
+      branches.push({
+        name: node.name,
+        updatedAt: node.target?.committedDate ?? null,
+        author: node.target?.author?.name || node.target?.author?.user?.login || null,
+      })
+    }
+    if (!repository.refs.pageInfo.hasNextPage) return { defaultBranch, branches, truncated: false }
+    after = repository.refs.pageInfo.endCursor
+  }
+  return { defaultBranch, branches, truncated: true }
+}
+
+export type GitHubMergeMethod = 'merge' | 'squash' | 'rebase'
+
+/**
+ * Merge an open pull request. `sha` pins the merge to the head that was
+ * inspected, so a push that lands in between is not merged unseen.
+ */
+export async function mergeRepositoryPullRequest(
+  token: string,
+  repoFullName: string,
+  prNumber: number,
+  args: { method: GitHubMergeMethod; sha?: string },
+): Promise<{ sha: string; merged: boolean }> {
+  const url = `${GITHUB_API}/repos/${repoFullName}/pulls/${prNumber}/merge`
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...repositoryHeaders(token),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      merge_method: args.method,
+      ...(args.sha ? { sha: args.sha } : {}),
+    }),
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!res.ok) {
+    const body = await readErrorBody(res)
+    throw new GitHubApiError(
+      `GitHub API responded ${res.status} for ${url}${body ? `: ${body}` : ''}`,
+      res.status,
+    )
+  }
+  return (await res.json()) as { sha: string; merged: boolean }
+}
+
+/**
+ * Take a pull request out of draft. The REST API cannot do this; it is a
+ * GraphQL mutation keyed by the pull request's node id.
+ */
+export async function markPullRequestReadyForReview(
+  token: string,
+  pullRequestNodeId: string,
+): Promise<void> {
+  const url = `${GITHUB_API}/graphql`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      ...repositoryHeaders(token),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query:
+        'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } } }',
+      variables: { id: pullRequestNodeId },
+    }),
+    signal: AbortSignal.timeout(10000),
+  })
+  if (!res.ok) {
+    const body = await readErrorBody(res)
+    throw new GitHubApiError(
+      `GitHub API responded ${res.status} for ${url}${body ? `: ${body}` : ''}`,
+      res.status,
+    )
+  }
+  const result = (await res.json()) as { errors?: Array<{ message?: string }> }
+  if (result.errors?.length) {
+    throw new GitHubApiError(
+      `GitHub could not mark the pull request ready: ${result.errors[0]?.message ?? 'unknown error'}`,
+      422,
+    )
+  }
 }
 
 /**

@@ -4,8 +4,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GitHubHostedDocsSourceRow } from '@breezify/core'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { portalDocumentToMarkdown } from '@/lib/portal/portal-doc-markdown'
-import { getInstallationToken, getPullRequest } from '../github'
-import { withGitHubRetry } from '../retry'
+import { listDocumentCoAuthors, loadDocsAutomationSettings } from '../docs-automation.server'
+import type { PullRequestMergeMethod } from '../docs-automation-settings'
+import {
+  getInstallationToken,
+  getPullRequest,
+  markPullRequestReadyForReview,
+  mergeRepositoryPullRequest,
+} from '../github'
+import { GitHubApiError, withGitHubRetry } from '../retry'
 import { readmeRootFromPaths } from './readme-layout'
 import {
   commitReadmeSpecFile,
@@ -201,12 +208,107 @@ export function diffReadmeSourcePublish(
   return diffReadmePublish(publishSource(source), publishDeps(admin, source))
 }
 
-export function publishReadmeSource(
+export async function publishReadmeSource(
   source: GitHubHostedDocsSourceRow,
   options: { includeConflicts?: boolean; selectedPaths?: string[]; message?: string },
   admin: SupabaseClient = createAdminClient(),
 ) {
-  return publishReadmeWorkspace(publishSource(source), publishDeps(admin, source), options)
+  const { publishing } = await loadDocsAutomationSettings(admin, source.workspace_id)
+  return publishReadmeWorkspace(
+    { ...publishSource(source), draftPullRequests: publishing.draftPullRequests },
+    publishDeps(admin, source),
+    {
+      ...options,
+      ...(publishing.coAuthors
+        ? {
+            coAuthors: (documentIds: string[]) =>
+              listDocumentCoAuthors(admin, {
+                workspaceId: source.workspace_id,
+                documentIds,
+                fallbackSince: source.last_sync_at ?? null,
+              }),
+          }
+        : {}),
+    },
+  )
+}
+
+export interface ReadmePullRequestMergeResult {
+  merged: boolean
+  pullRequestNumber: number
+  mergeCommitSha: string | null
+  method: PullRequestMergeMethod
+}
+
+/**
+ * Merge the open publish pull request with the workspace's merge method. A
+ * draft is marked ready first, because GitHub refuses to merge a draft. The
+ * merge lands on the synced branch; the next sync links the new pages.
+ */
+export async function mergeReadmeSourcePullRequest(
+  source: GitHubHostedDocsSourceRow,
+  admin: SupabaseClient = createAdminClient(),
+): Promise<ReadmePullRequestMergeResult> {
+  const number = source.publish_pull_request_number
+  if (!number || !isReadmePublishBranch(source.publish_pull_request_head)) {
+    throw new ReadmePublishError(
+      'There is no open publish pull request to merge.',
+      409,
+      'no_pull_request',
+    )
+  }
+  const { publishing } = await loadDocsAutomationSettings(admin, source.workspace_id)
+  const token = await withGitHubRetry(() => getInstallationToken(source.installation_id))
+  const pullRequest = await withGitHubRetry(() =>
+    getPullRequest(token, source.repo_full_name, number),
+  )
+  if (pullRequest.state !== 'open') {
+    await reconcileReadmePublishPullRequest(source, admin)
+    throw new ReadmePublishError(
+      pullRequest.merged
+        ? 'The publish pull request was already merged.'
+        : 'The publish pull request was closed without merging.',
+      409,
+      'pull_request_not_open',
+    )
+  }
+  if (pullRequest.head?.ref !== source.publish_pull_request_head) {
+    throw new ReadmePublishError(
+      'The publish pull request no longer points at the Breezify branch.',
+      409,
+      'pull_request_changed',
+    )
+  }
+  try {
+    if (pullRequest.draft && pullRequest.node_id) {
+      await markPullRequestReadyForReview(token, pullRequest.node_id)
+    }
+    const merged = await mergeRepositoryPullRequest(token, source.repo_full_name, number, {
+      method: publishing.mergeMethod,
+      sha: pullRequest.head?.sha,
+    })
+    await reconcileReadmePublishPullRequest(source, admin)
+    return {
+      merged: merged.merged,
+      pullRequestNumber: number,
+      mergeCommitSha: merged.sha ?? null,
+      method: publishing.mergeMethod,
+    }
+  } catch (error) {
+    if (!(error instanceof GitHubApiError)) throw error
+    // 405: not mergeable (required checks or reviews, conflicts, or the method
+    // is not allowed in this repository). 409: the head moved. 403: the App
+    // may not merge here. GitHub's own wording says which, so pass it on.
+    if (![403, 405, 409, 422].includes(error.status)) throw error
+    const detail = /"message"\s*:\s*"([^"]+)"/.exec(error.message)?.[1]
+    throw new ReadmePublishError(
+      detail
+        ? `GitHub did not merge the pull request: ${detail}`
+        : 'GitHub did not merge the pull request. Check its required checks and reviews.',
+      409,
+      'merge_refused',
+    )
+  }
 }
 
 async function linkedReadmeSource(
