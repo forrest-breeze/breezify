@@ -7,10 +7,12 @@ import { portalDocumentToMarkdown } from '@/lib/portal/portal-doc-markdown'
 import { listDocumentCoAuthors, loadDocsAutomationSettings } from '../docs-automation.server'
 import type { PullRequestMergeMethod } from '../docs-automation-settings'
 import {
+  compareRepositoryRefs,
   getInstallationToken,
   getPullRequest,
   markPullRequestReadyForReview,
   mergeRepositoryPullRequest,
+  type GitHubPR,
 } from '../github'
 import { GitHubApiError, withGitHubRetry } from '../retry'
 import { reconcileReadmeFolderVisibility } from './readme-folder-visibility'
@@ -20,11 +22,13 @@ import {
   diffReadmePublish,
   inspectReadmePublish,
   isReadmePublishBranch,
+  README_PUBLISH_BRANCH_PREFIX,
   publishReadmeWorkspace,
   ReadmePublishError,
   type ReadmePublishDeps,
   type ReadmePublishSource,
 } from './readme-publish'
+import { buildReadmeBranchReview, type ReadmeBranchReview } from './readme-review'
 import { createSupabaseReadmeStore } from './readme-store-supabase'
 import {
   ReadmeSyncError,
@@ -162,15 +166,25 @@ export async function syncReadmeSource(
   }
 }
 
-/** Forget the publish pull request once it has been merged or closed. */
+/**
+ * Forget the publish pull request once it has been merged or closed.
+ *
+ * A working branch someone named is where the workspace is until it merges.
+ * Closing its pull request without merging, or deleting the branch, discards
+ * it: the workspace goes back to the synced branch, with the next sync
+ * replacing what Breezify holds (a document's replaced content stays in its
+ * version history). Until that sync has run the link is `pending`, which also
+ * keeps the discarded changes from being published to the synced branch.
+ *
+ * A pull request Breezify opened itself (pull request mode) is different: its
+ * changes are the workspace's own, so closing it leaves them to publish again.
+ */
 export async function reconcileReadmePublishPullRequest(
   source: GitHubHostedDocsSourceRow,
   admin: SupabaseClient = createAdminClient(),
 ): Promise<GitHubHostedDocsSourceRow> {
-  if (
-    !source.publish_pull_request_number ||
-    !isReadmePublishBranch(source.publish_pull_request_head)
-  ) {
+  const head = source.publish_pull_request_head
+  if (!source.publish_pull_request_number || !isReadmePublishBranch(head)) {
     return source
   }
   try {
@@ -179,19 +193,28 @@ export async function reconcileReadmePublishPullRequest(
       getPullRequest(token, source.repo_full_name, source.publish_pull_request_number!),
     )
     if (pullRequest.state === 'open') return source
-    const { data, error } = await admin
+    const merged = pullRequest.merged === true || Boolean(pullRequest.merged_at)
+    const discarded = !merged && !head!.startsWith(README_PUBLISH_BRANCH_PREFIX)
+    // The reset is recorded together with letting go of the branch, and only
+    // while no sync is running: a running sync would mark the link synced
+    // again and the reset would be lost. The next poll tries again.
+    if (discarded && source.sync_status !== 'synced') return source
+    let update = admin
       .from('github_hosted_docs_sources')
       .update({
         publish_pull_request_number: null,
         publish_pull_request_url: null,
         publish_pull_request_head: null,
         publish_last_commit_sha: null,
+        ...(discarded
+          ? { sync_status: 'pending', pending_sync_mode: 'replace_breezify', last_sync_error: null }
+          : {}),
       })
       .eq('id', source.id)
       .eq('workspace_id', source.workspace_id)
       .eq('publish_pull_request_number', pullRequest.number)
-      .select('*')
-      .maybeSingle()
+    if (discarded) update = update.eq('sync_status', 'synced')
+    const { data, error } = await update.select('*').maybeSingle()
     if (error) throw error
     return (data as GitHubHostedDocsSourceRow | null) ?? source
   } catch (error) {
@@ -200,6 +223,20 @@ export async function reconcileReadmePublishPullRequest(
     console.error('[Breezify] readme publish PR reconciliation failed:', error)
     return source
   }
+}
+
+/**
+ * Whether the link is waiting for the reset that follows a discarded working
+ * branch (see reconcileReadmePublishPullRequest). Whoever sees it starts the
+ * sync; the claim in syncReadmeSource lets only one of them run it.
+ */
+export function awaitsReadmeWorkspaceReset(source: GitHubHostedDocsSourceRow): boolean {
+  return (
+    isReadmeFormatSource(source) &&
+    source.sync_status === 'pending' &&
+    source.pending_sync_mode === 'replace_breezify' &&
+    source.pending_pull_request_number === null
+  )
 }
 
 export function inspectReadmeSourcePublish(
@@ -218,7 +255,13 @@ export function diffReadmeSourcePublish(
 
 export async function publishReadmeSource(
   source: GitHubHostedDocsSourceRow,
-  options: { includeConflicts?: boolean; selectedPaths?: string[]; message?: string },
+  options: {
+    includeConflicts?: boolean
+    selectedPaths?: string[]
+    message?: string
+    /** Save to a new working branch with this name. */
+    branch?: string
+  },
   admin: SupabaseClient = createAdminClient(),
 ) {
   const { publishing } = await loadDocsAutomationSettings(admin, source.workspace_id)
@@ -239,6 +282,69 @@ export async function publishReadmeSource(
         : {}),
     },
   )
+}
+
+/**
+ * The open pull request of the working branch, or null when there is none:
+ * nothing was saved to a branch, or its pull request was merged or closed (in
+ * which case the link forgets it).
+ */
+async function openWorkingBranchPullRequest(
+  source: GitHubHostedDocsSourceRow,
+  admin: SupabaseClient,
+): Promise<{ token: string; branch: string; pullRequest: GitHubPR } | null> {
+  const number = source.publish_pull_request_number
+  const branch = source.publish_pull_request_head
+  if (!number || !branch || !isReadmePublishBranch(branch)) return null
+  const token = await withGitHubRetry(() => getInstallationToken(source.installation_id))
+  const pullRequest = await withGitHubRetry(() =>
+    getPullRequest(token, source.repo_full_name, number),
+  )
+  if (pullRequest.state !== 'open') {
+    await reconcileReadmePublishPullRequest(source, admin)
+    return null
+  }
+  if (pullRequest.head?.ref !== branch) return null
+  return { token, branch, pullRequest }
+}
+
+/** What the working branch changes on the synced branch, for the Review page. */
+export async function loadReadmeSourceReview(
+  source: GitHubHostedDocsSourceRow,
+  admin: SupabaseClient = createAdminClient(),
+): Promise<ReadmeBranchReview | null> {
+  const open = await openWorkingBranchPullRequest(source, admin)
+  if (!open) return null
+  const base = open.pullRequest.base?.ref ?? source.branch
+  if (!base) return null
+  const comparison = await withGitHubRetry(() =>
+    compareRepositoryRefs(open.token, source.repo_full_name, base, open.branch),
+  )
+  return buildReadmeBranchReview({
+    branch: open.branch,
+    base,
+    repoFullName: source.repo_full_name,
+    pullRequest: open.pullRequest,
+    comparison,
+  })
+}
+
+/**
+ * Ask for a review of the working branch: take its pull request out of draft,
+ * which is what tells its reviewers on GitHub it is ready.
+ */
+export async function requestReadmeSourceReview(
+  source: GitHubHostedDocsSourceRow,
+  admin: SupabaseClient = createAdminClient(),
+): Promise<{ pullRequestNumber: number; draft: boolean }> {
+  const open = await openWorkingBranchPullRequest(source, admin)
+  if (!open) {
+    throw new ReadmePublishError('There is no open working branch to review.', 409, 'no_pull_request')
+  }
+  if (open.pullRequest.draft && open.pullRequest.node_id) {
+    await markPullRequestReadyForReview(open.token, open.pullRequest.node_id)
+  }
+  return { pullRequestNumber: open.pullRequest.number, draft: false }
 }
 
 export interface ReadmePullRequestMergeResult {

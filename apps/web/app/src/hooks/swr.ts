@@ -1,5 +1,6 @@
 import { useState } from "react"
 import useSWR, { type SWRConfiguration, type SWRResponse } from "swr"
+import { readmeWorkingBranch } from "@/lib/github/readme/readme-branch-name"
 import type {
   DocumentLinksResponse,
   FolderDetailResponse,
@@ -773,13 +774,22 @@ export interface GithubHostedDocsResponse {
 
 export function githubHostedDocsRefreshInterval(
   latest:
-    | { source: Pick<GitHubHostedDocsSourceRow, "sync_status"> | null }
+    | {
+        source:
+          | (Pick<GitHubHostedDocsSourceRow, "sync_status"> &
+              Partial<Pick<GitHubHostedDocsSourceRow, "publish_pull_request_number">>)
+          | null
+      }
     | undefined,
 ): number {
   const status = latest?.source?.sync_status
-  return status === "disabled" || status === "pending" || status === "syncing"
-    ? 5_000
-    : 0
+  if (status === "disabled" || status === "pending" || status === "syncing") {
+    return 5_000
+  }
+  // An open working branch or pull request ends on GitHub (merged, closed, or
+  // its branch deleted), which nothing here is told about. Reading the link
+  // is what notices, so keep reading it while one is open.
+  return latest?.source?.publish_pull_request_number ? 30_000 : 0
 }
 
 export function useGithubHostedDocs(
@@ -789,7 +799,13 @@ export function useGithubHostedDocs(
   return useSWRWithDataInterval<GithubHostedDocsResponse>(
     enabled ? "/api/github/hosted-docs?summary=1" : null,
     githubHostedDocsRefreshInterval,
-    { dedupingInterval: 2_000, ...swrConfig },
+    // Coming back to the tab is usually coming back from GitHub.
+    {
+      dedupingInterval: 2_000,
+      revalidateOnFocus: true,
+      focusThrottleInterval: 10_000,
+      ...swrConfig,
+    },
   )
 }
 
@@ -809,6 +825,11 @@ export interface GithubHostedDocsPublishStatusResponse {
   compared_commit_sha: string | null
   comparison_key?: string | null
   pull_request_up_to_date?: boolean
+  /**
+   * API reference pages that are not generated from a definition, so GitHub
+   * never updates them (ReadMe-format links only).
+   */
+  unsynced_api_reference_page_count?: number
   code?: string
   message?: string
 }
@@ -865,6 +886,90 @@ export function useGithubHostedDocsPublishStatus(
       : null,
     githubHostedDocsPublishStatusRefreshInterval,
     { dedupingInterval: 30_000, revalidateOnFocus: true, ...swrConfig },
+  )
+}
+
+export type GithubHostedDocsReviewFileStatus =
+  | "added"
+  | "modified"
+  | "removed"
+  | "renamed"
+
+export interface GithubHostedDocsReviewFile {
+  path: string
+  previous_path: string | null
+  status: GithubHostedDocsReviewFileStatus
+  additions: number
+  deletions: number
+  /** Unified diff; null when GitHub has none or it was left out for size. */
+  patch: string | null
+}
+
+export interface GithubHostedDocsReview {
+  open: true
+  /** The working branch and the synced branch it merges into. */
+  branch: string
+  base: string
+  repo_full_name: string
+  pull_request: {
+    number: number
+    url: string | null
+    title: string
+    draft: boolean
+    created_at: string
+    updated_at: string
+  }
+  behind_by: number
+  commits: Array<{
+    sha: string
+    url: string | null
+    subject: string
+    author: string
+    date: string | null
+  }>
+  contributors: Array<{
+    name: string
+    login: string | null
+    avatar_url: string | null
+    last_active_at: string | null
+  }>
+  files: GithubHostedDocsReviewFile[]
+  file_count: number
+  additions: number
+  deletions: number
+  truncated: boolean
+}
+
+export type GithubHostedDocsReviewResponse =
+  | GithubHostedDocsReview
+  | { open: false }
+
+export const GITHUB_HOSTED_DOCS_REVIEW_PATH = "/api/github/hosted-docs/review"
+
+/**
+ * What the working branch changes on the synced branch. The key carries the
+ * branch and its last commit, so a save to the branch reads the review again.
+ */
+export function useGithubHostedDocsReview(
+  source: GitHubHostedDocsSourceRow | null | undefined,
+  config?: SWRConfiguration<GithubHostedDocsReviewResponse>,
+) {
+  const branch = readmeWorkingBranch(source)
+  const basis = branch
+    ? JSON.stringify([
+        source?.id,
+        branch,
+        source?.publish_pull_request_number,
+        source?.publish_last_commit_sha,
+        source?.last_sync_commit_sha,
+      ])
+    : ""
+  return useSWR<GithubHostedDocsReviewResponse>(
+    branch
+      ? `${GITHUB_HOSTED_DOCS_REVIEW_PATH}?basis=${encodeURIComponent(basis)}`
+      : null,
+    fetcher,
+    { dedupingInterval: 10_000, revalidateOnFocus: true, ...config },
   )
 }
 

@@ -72,6 +72,21 @@ describe("githubHostedDocsRefreshInterval", () => {
       ).toBe(0)
     },
   )
+
+  it("keeps checking, slowly, while a working branch or pull request is open", () => {
+    // It ends on GitHub (merged, closed, branch deleted); only reading the
+    // link again notices.
+    expect(
+      githubHostedDocsRefreshInterval({
+        source: { sync_status: "synced", publish_pull_request_number: 7 },
+      }),
+    ).toBe(30_000)
+    expect(
+      githubHostedDocsRefreshInterval({
+        source: { sync_status: "synced", publish_pull_request_number: null },
+      }),
+    ).toBe(0)
+  })
 })
 
 describe("githubHostedDocsPublishStatusRefreshInterval", () => {

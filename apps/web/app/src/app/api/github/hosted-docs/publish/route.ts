@@ -57,6 +57,8 @@ interface PublishStatusPayload {
   compared_commit_sha: string | null
   comparison_key: string | null
   pull_request_up_to_date?: boolean
+  /** ReadMe format: API reference pages GitHub never syncs. */
+  unsynced_api_reference_page_count?: number
   code?: string
   message?: string
 }
@@ -106,6 +108,9 @@ const bodySchema = z
     // Set by the client's auto-publish timer; the server decides whether an
     // unattended publish is allowed and whether editing has really stopped.
     auto: z.literal(true).optional(),
+    // ReadMe format: save to a new working branch with this name instead of
+    // publishing the usual way. The name is checked where the branch is made.
+    branch: z.string().trim().min(1).max(200).optional(),
     paths: z
       .array(z.string().trim().min(1).max(1024))
       .min(1)
@@ -271,6 +276,7 @@ export async function GET(): Promise<NextResponse> {
         compared_commit_sha: inspected.comparedCommitSha,
         comparison_key: inspected.comparisonKey,
         pull_request_up_to_date: inspected.pullRequestUpToDate,
+        unsynced_api_reference_page_count: inspected.unsyncedApiReferencePageCount,
         code: inspected.code,
         message: inspected.message,
       })
@@ -494,11 +500,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       )
     }
 
+    if (parsedBody.data.branch && !isReadmeFormatSource(source)) {
+      return NextResponse.json(
+        {
+          error: 'Saving to a branch is only available for ReadMe-format repositories.',
+          code: 'branch_unsupported',
+        },
+        { status: 409 },
+      )
+    }
+
     if (parsedBody.data.auto) {
       if (
         !isReadmeFormatSource(source) ||
         parsedBody.data.conflict_resolution ||
-        parsedBody.data.paths
+        parsedBody.data.paths ||
+        parsedBody.data.branch ||
+        // An unattended publish commits to the synced branch. While changes
+        // are being collected on a working branch, saving stays a decision.
+        source.publish_pull_request_head
       ) {
         return NextResponse.json(
           {
@@ -551,6 +571,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         {
           includeConflicts: parsedBody.data.conflict_resolution === 'breezify',
           selectedPaths: parsedBody.data.paths,
+          branch: parsedBody.data.branch,
         },
         admin,
       )

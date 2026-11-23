@@ -161,6 +161,97 @@ describe("WorkspaceGitHubPublish", () => {
     ).toBeInTheDocument()
   })
 
+  it("offers to save to a new branch instead of the synced one", async () => {
+    const user = userEvent.setup()
+    harness.source = {
+      ...harness.source,
+      format: "readme",
+      publish_mode: "direct",
+      branch: "v1.6",
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          pull_request_number: 7,
+          pull_request_url: "https://github.test/pull/7",
+          branch: "v1.6_pricing",
+        }),
+        { status: 201 },
+      ),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<WorkspaceGitHubPublish />)
+    // Both destinations are offered side by side, not behind the dialog.
+    expect(screen.getByRole("button", { name: "Publish workspace" })).toBeEnabled()
+    await user.click(screen.getByRole("button", { name: "Save to branch" }))
+    expect(
+      screen.getByRole("heading", { name: "Save changes to a new branch?" }),
+    ).toBeInTheDocument()
+    const name = screen.getByRole("textbox", { name: "Branch name" })
+    expect(screen.getByRole("button", { name: "Create branch" })).toBeDisabled()
+    await user.type(name, "not a branch")
+    expect(screen.getByRole("button", { name: "Create branch" })).toBeDisabled()
+    await user.clear(name)
+    // Only the part after the version is typed: the branch is named after the
+    // version it is cut from, which is what files it under that version.
+    await user.type(name, "pricing")
+    expect(screen.getByText(/Creates v1.6_pricing from v1.6/)).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Create branch" }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/github/hosted-docs/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch: "v1.6_pricing" }),
+      })
+    })
+  })
+
+  it("saves to the working branch while one is open, and links to its review", async () => {
+    const user = userEvent.setup()
+    harness.source = {
+      ...harness.source,
+      format: "readme",
+      publish_mode: "direct",
+      branch: "v1.6",
+      publish_pull_request_number: 7,
+      publish_pull_request_url: "https://github.test/pull/7",
+      publish_pull_request_head: "v1.6_pricing",
+    }
+
+    render(<WorkspaceGitHubPublish />)
+    expect(screen.getByRole("link", { name: "Review v1.6_pricing" })).toHaveAttribute(
+      "href",
+      "/editor/review",
+    )
+    await user.click(screen.getByRole("button", { name: "Save to v1.6_pricing" }))
+    expect(
+      screen.getByRole("heading", { name: "Save changes to v1.6_pricing?" }),
+    ).toBeInTheDocument()
+    // One branch at a time: there is no second branch to start.
+    expect(screen.queryByRole("button", { name: "Save to branch" })).not.toBeInTheDocument()
+    expect(screen.getByText(/The v1.6 branch will not change until/)).toBeInTheDocument()
+  })
+
+  it("publishes the usual way from the publish button", async () => {
+    const user = userEvent.setup()
+    harness.source = { ...harness.source, format: "readme", publish_mode: "direct", branch: "v1.6" }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 201 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<WorkspaceGitHubPublish />)
+    await user.click(screen.getByRole("button", { name: "Publish workspace" }))
+    expect(screen.queryByRole("textbox", { name: "Branch name" })).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Commit to GitHub" }))
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/github/hosted-docs/publish",
+        expect.objectContaining({ body: "{}" }),
+      )
+    })
+  })
+
   it("leaves diff navigation to the Changes sidebar tab", () => {
     render(<WorkspaceGitHubPublish />)
 
@@ -203,6 +294,27 @@ describe("WorkspaceGitHubPublish", () => {
     expect(screen.getByText("GitHub up to date")).toBeInTheDocument()
     act(() => vi.advanceTimersByTime(3000))
     expect(screen.queryByText("GitHub up to date")).not.toBeInTheDocument()
+  })
+
+  it("says which API reference pages GitHub is missing instead of up to date", () => {
+    vi.useFakeTimers()
+    harness.publishStatus = {
+      status: "up_to_date",
+      changed_file_count: 0,
+      written_file_count: 0,
+      deleted_file_count: 0,
+      unchanged_file_count: 84,
+      compared_commit_sha: "abc123",
+      unsynced_api_reference_page_count: 63,
+    }
+
+    render(<WorkspaceGitHubPublish />)
+
+    expect(screen.getByText("63 API reference pages aren't in GitHub")).toBeInTheDocument()
+    expect(screen.queryByText("GitHub up to date")).not.toBeInTheDocument()
+    // Unlike the acknowledgement, the warning stays.
+    act(() => vi.advanceTimersByTime(3000))
+    expect(screen.getByText("63 API reference pages aren't in GitHub")).toBeInTheDocument()
   })
 
   it("shows only the link when the open pull request is up to date", () => {

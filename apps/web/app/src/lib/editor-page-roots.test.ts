@@ -203,6 +203,15 @@ describe("buildEditorPageRoots", () => {
     expect(tree.roots[0].folderTargetFolderId).toBeNull()
   })
 
+  it("marks a page whose folder was deleted, and not one that is just empty", () => {
+    const deleted = build(portal({ pages: [page({ scope: ["gone"] })] }), [f("guides")], [])!
+    expect(deleted.roots[1]).toMatchObject({ title: "API Reference", contentDeleted: true })
+    expect(deleted.roots[0].contentDeleted).toBe(false)
+
+    const empty = build(portal({ pages: [page()] }), [f("api"), f("guides")], [])!
+    expect(empty.roots[1].contentDeleted).toBe(false)
+  })
+
   it("finishes on a folder loop in the data", () => {
     const tree = build(
       portal({ pages: [page()] }),

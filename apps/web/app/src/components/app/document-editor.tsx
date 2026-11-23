@@ -1235,7 +1235,18 @@ export function DocumentEditor({ documentId }: DocumentEditorProps): React.React
                   onRestore={() => {
                     initializedRef.current = null
                     void mutate()
-                    if (isGitHubDocument) void mutateGitHubState()
+                    if (isGitHubDocument) {
+                      void mutateGitHubState()
+                      return
+                    }
+                    // A revert is written on the server straight away, so
+                    // there is no local edit to save. It changes what there
+                    // is to publish exactly like a save does, and nothing
+                    // else tells the GitHub status to look again.
+                    notifyWorkspaceDocumentSaved({
+                      documentId,
+                      savedAt: new Date().toISOString(),
+                    })
                   }}
                 />
               )}

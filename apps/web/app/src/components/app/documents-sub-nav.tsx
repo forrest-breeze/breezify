@@ -1287,7 +1287,7 @@ function PageRootEntry({
         <div className="ml-3 border-l border-border/40 pl-1">
           {isEmpty ? (
             <p className="px-2 py-1.5 text-[11px] italic text-muted-foreground/50">
-              Empty
+              {root.contentDeleted ? "Content deleted" : "Empty"}
             </p>
           ) : (
             children

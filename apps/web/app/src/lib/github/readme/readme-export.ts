@@ -18,6 +18,7 @@ import {
   type ReadmeOrderFileState,
   type ReadmeSyncState,
 } from './readme-layout'
+import { preserveReadmeSource, type MarkdownCanonicalizer } from './readme-preserve'
 
 /**
  * Workspace -> repository, for the ReadMe format.
@@ -25,6 +26,12 @@ import {
  * The plan is computed from blob SHAs alone: a document that still matches
  * what the last sync recorded is not rendered at all, so files nobody edited
  * in Breezify are never rewritten (and keep any MDX the editor cannot express).
+ *
+ * A page that was edited is not rewritten wholesale either. Given the file as
+ * it is in the repository (`previousContent`), only the blocks the edit
+ * touched are replaced; see readme-preserve.ts. The plan lists the files it
+ * would need for that in `sourcePaths`, so the caller plans, reads those files
+ * and plans again.
  *
  * Pure: no database or network access.
  */
@@ -116,6 +123,11 @@ export interface ReadmeExportPlan {
   orderFiles: Record<string, ReadmeOrderFileState>
   /** Paths Breezify manages once this plan has been applied. */
   managedPaths: string[]
+  /**
+   * Repository files of pages this plan rewrites whose content was not given
+   * in `previousContent`. With it, the pages keep their unedited source.
+   */
+  sourcePaths: string[]
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -147,6 +159,13 @@ export function planReadmeExport(input: {
   state: ReadmeSyncState
   /** Write conflicted documents too, making Breezify's version win. */
   includeConflicts?: boolean
+  /**
+   * Compares Markdown by what it renders. Given, an edited page keeps the
+   * repository's text for the blocks that were not edited.
+   */
+  canonical?: MarkdownCanonicalizer
+  /** Repository path -> file content at the commit being compared. */
+  previousContent?: ReadonlyMap<string, string>
 }): ReadmeExportPlan {
   const { root, tree, state } = input
   const full = (relative: string): string => joinReadmePath(root, relative)
@@ -157,6 +176,38 @@ export function planReadmeExport(input: {
   const desired = new Set<string>()
   let unchangedCount = 0
   let conflictCount = 0
+
+  const sourcePaths = new Set<string>()
+  /** The file for a page whose previous version is at `sourcePath`. */
+  const renderFile = (
+    frontmatter: Record<string, unknown>,
+    markdown: string,
+    rawFrontmatter: string | null | undefined,
+    sourcePath: string | null | undefined,
+  ): string => {
+    const rewritten = (): string => serializeReadmeFile(frontmatter, markdown, rawFrontmatter)
+    if (!input.canonical || !sourcePath || !tree.has(sourcePath)) return rewritten()
+    const previous = input.previousContent?.get(sourcePath)
+    if (previous === undefined) {
+      sourcePaths.add(sourcePath)
+      return rewritten()
+    }
+    let body: string | null
+    try {
+      body = preserveReadmeSource({
+        previousBody: parseReadmeFile(previous).body,
+        markdown,
+        canonical: input.canonical,
+      })
+    } catch {
+      // Keeping the source is a refinement; a page must still be publishable.
+      body = null
+    }
+    if (body === null) return rewritten()
+    const content = serializeReadmeFile(frontmatter, body, rawFrontmatter, true)
+    // A file with Windows line endings keeps them.
+    return previous.includes('\r\n') ? content.replace(/\n/g, '\r\n') : content
+  }
 
   // --- Folders -> directories ------------------------------------------------
   const folderById = new Map(input.folders.map((folder) => [folder.id, folder]))
@@ -298,10 +349,11 @@ export function planReadmeExport(input: {
     // Unchanged frontmatter is written back exactly as the author spelled it.
     const keepRaw =
       typeof link?.frontmatterRaw === 'string' && sameJson(frontmatter, link.frontmatter)
-    const content = serializeReadmeFile(
+    const content = renderFile(
       frontmatter,
       document.markdown,
       keepRaw ? link!.frontmatterRaw : undefined,
+      link?.path,
     )
     const blobSha = gitBlobSha(content)
     const written = blobSha !== treeSha
@@ -369,10 +421,11 @@ export function planReadmeExport(input: {
         const keepRaw =
           typeof link?.indexFrontmatterRaw === 'string' &&
           sameJson(frontmatter, link.indexFrontmatter)
-        const content = serializeReadmeFile(
+        const content = renderFile(
           frontmatter,
           folder.markdown,
           keepRaw ? link!.indexFrontmatterRaw : undefined,
+          link?.indexPath,
         )
         const blobSha = gitBlobSha(content)
         indexWritten = blobSha !== treeSha
@@ -516,6 +569,7 @@ export function planReadmeExport(input: {
     specs: specResults,
     orderFiles,
     managedPaths: [...desired].sort((a, b) => a.localeCompare(b)),
+    sourcePaths: [...sourcePaths].sort((a, b) => a.localeCompare(b)),
   }
 }
 

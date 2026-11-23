@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import { DashboardShell } from "@/components/app/sidebar"
 import { SWRProvider } from "@/components/swr-provider"
 import { AppThemeProvider } from "@/components/app-theme-provider"
-import { APP_THEME_INIT_SCRIPT } from "@/lib/app-theme-init"
+import { AppThemeInitScript } from "@/components/app-theme-init-script"
 import { CommandPaletteProvider } from "@/components/app/command-palette"
 import { getAuthUser } from "@/lib/auth/get-auth-user"
 import { createAdminClient } from "@/lib/supabase/admin"
@@ -67,7 +67,7 @@ export default async function DashboardLayout({
   return (
     <AppThemeProvider>
       {/* Runs during HTML parse, before the shell paints. */}
-      <script dangerouslySetInnerHTML={{ __html: APP_THEME_INIT_SCRIPT }} />
+      <AppThemeInitScript />
       <SWRProvider userId={user.id}>
         <CommandPaletteProvider>
           <DashboardShell>{children}</DashboardShell>

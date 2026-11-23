@@ -1233,6 +1233,46 @@ export interface PublicDocWithContent extends PublicDocSummary {
 }
 
 /**
+ * Whether a page's own scope names content that no longer exists: it lists
+ * folders or documents, and every one of them has been deleted (a trashed
+ * document counts as deleted). The portal then says the page's content was
+ * deleted instead of inviting the visitor to add some. A scope that names
+ * nothing, or a lookup that fails, is never reported as deleted.
+ */
+export async function portalScopeTargetsDeleted(
+  workspaceId: string,
+  scope: PortalScopeEntry[],
+): Promise<boolean> {
+  const folderIds = scope.map(scopeEntryId).filter(Boolean)
+  const docIds = scope.flatMap((entry) =>
+    typeof entry === "object" && "doc" in entry ? [entry.doc] : [],
+  )
+  if (folderIds.length === 0 && docIds.length === 0) return false
+  const admin = createAdminClient()
+  const [folders, docs] = await Promise.all([
+    folderIds.length > 0
+      ? admin
+          .from("folders")
+          .select("id")
+          .eq("workspace_id", workspaceId)
+          .in("id", folderIds)
+          .limit(1)
+      : Promise.resolve({ data: [], error: null }),
+    docIds.length > 0
+      ? admin
+          .from("documents")
+          .select("id")
+          .eq("workspace_id", workspaceId)
+          .in("id", docIds)
+          .is("deleted_at", null)
+          .limit(1)
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  if (folders.error || docs.error) return false
+  return (folders.data?.length ?? 0) === 0 && (docs.data?.length ?? 0) === 0
+}
+
+/**
  * Every public document for a workspace WITH its body, for whole-KB text output
  * (llms-full.txt). Applies exactly the same visibility + scope contract as
  * getPublicDocuments.

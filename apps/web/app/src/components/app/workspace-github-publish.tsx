@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   ExternalLink,
+  GitBranch,
   RefreshCw,
   Upload,
 } from "lucide-react"
@@ -19,7 +20,12 @@ import {
   subscribeToWorkspaceDocumentSaves,
 } from "@/lib/workspace-publish-events"
 import { useGithubAutoPublish } from "@/hooks/use-github-auto-publish"
+import { useHasHydrated } from "@/hooks/use-has-hydrated"
 import { getGithubPublishingSettings } from "@/lib/github/docs-automation-settings"
+import {
+  isValidReadmeBranchName,
+  readmeWorkingBranch,
+} from "@/lib/github/readme/readme-branch-name"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { LoadingBar } from "@/components/ui/loading-bar"
 import { cn } from "@/lib/utils"
@@ -48,6 +54,7 @@ interface WorkspacePublishResult {
 const PUBLISH_ROLES = new Set(["owner", "admin", "editor"])
 const CONFIGURE_ROLES = new Set(["owner", "admin"])
 const UP_TO_DATE_ACKNOWLEDGEMENT_MS = 3000
+const REVIEW_PATH = "/editor/review"
 
 async function responseFailure(
   response: Response,
@@ -83,7 +90,13 @@ export function WorkspaceGitHubPublish({
   const [dismissedUpToDateKey, setDismissedUpToDateKey] = useState<string | null>(
     null,
   )
+  // Where this publish goes, set by the button that opened the confirmation:
+  // the link's usual way, or a new working branch.
+  const [destination, setDestination] = useState<"default" | "branch">("default")
+  const [branchName, setBranchName] = useState("")
   const helperId = useId()
+  const branchInputId = useId()
+  const hydrated = useHasHydrated()
 
   const source = data?.source ?? null
   const canPublish = Boolean(
@@ -106,10 +119,22 @@ export function WorkspaceGitHubPublish({
         url: source.publish_pull_request_url,
       }
     : null
+  // The branch changes were saved to instead of the synced one. While it is
+  // open the workspace is on it: every publish adds to it.
+  const workingBranch = readmeWorkingBranch(source)
+  // A branch someone named is called by its name; one Breezify generated for
+  // a pull request keeps the pull request wording.
+  const namedBranch =
+    workingBranch && !workingBranch.startsWith("breezify/") ? workingBranch : null
   // A ReadMe-format link can commit straight to the synced branch, the way
   // ReadMe's own GitHub integration does, instead of opening a pull request.
   const directCommit =
-    source?.format === "readme" && source.publish_mode === "direct"
+    source?.format === "readme" &&
+    source.publish_mode === "direct" &&
+    !pullRequest
+  // Starting a working branch is offered until one is open.
+  const canChooseBranch = source?.format === "readme" && !pullRequest
+  const syncedBranch = source?.branch ?? null
   const exactStatusUpToDate = Boolean(
     canPublish && sourceReady && publishStatus?.status === "up_to_date",
   )
@@ -170,7 +195,9 @@ export function WorkspaceGitHubPublish({
     void mutate()
   }, [mutate, publishStatus?.status])
 
-  if (isLoading || !workspace) return null
+  // The server has no SWR data and renders nothing; hold that until hydration
+  // so the cache restored from localStorage cannot render a different tree.
+  if (!hydrated || isLoading || !workspace) return null
 
   // Breeze internal tool: GitHub publishing isn't offered (no GitHub App), so
   // there is nothing to set up when no source is linked.
@@ -194,7 +221,36 @@ export function WorkspaceGitHubPublish({
         }
       : null
 
+  const toBranch = canChooseBranch && destination === "branch"
+  // A branch carries the version it is cut from in its name (`v1.6_pricing`),
+  // the way ReadMe names them: that is what files it under the version, here
+  // and in ReadMe.
+  const branchPrefix = syncedBranch ? `${syncedBranch}_` : ""
+  const typedBranch = branchName.trim()
+  const branchSuffix =
+    branchPrefix && typedBranch.startsWith(branchPrefix)
+      ? typedBranch.slice(branchPrefix.length)
+      : typedBranch
+  const requestedBranch = branchSuffix ? `${branchPrefix}${branchSuffix}` : ""
+  const branchNameProblem = !toBranch
+    ? null
+    : requestedBranch === ""
+      ? "Name the branch."
+      : requestedBranch === syncedBranch
+        ? `${syncedBranch} is the synced branch. Choose another name.`
+        : !isValidReadmeBranchName(requestedBranch)
+          ? "Use letters, numbers, dots, dashes, underscores and slashes."
+          : null
+
+  const openConfirm = (next: "default" | "branch"): void => {
+    setError(null)
+    setDestination(next)
+    setBranchName("")
+    setConfirmOpen(true)
+  }
+
   const publish = async (): Promise<void> => {
+    if (branchNameProblem) return
     setPublishing(true)
     setError(null)
     try {
@@ -202,11 +258,12 @@ export function WorkspaceGitHubPublish({
       const response = await fetch("/api/github/hosted-docs/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          source.conflict_count > 0
+        body: JSON.stringify({
+          ...(source.conflict_count > 0
             ? { conflict_resolution: "breezify" }
-          : {},
-        ),
+            : {}),
+          ...(toBranch ? { branch: requestedBranch } : {}),
+        }),
       })
       if (!response.ok) {
         const failure = await responseFailure(response)
@@ -265,7 +322,20 @@ export function WorkspaceGitHubPublish({
     canPublish && sourceReady && publishStatus?.status === "blocked"
   const exactStatusSyncRequired =
     canPublish && sourceReady && publishStatus?.status === "sync_required"
-  if (exactStatusUpToDate && !upToDateVisible && !pullRequest) return null
+  // API reference pages GitHub never syncs (imported, not generated from the
+  // repository's definition). With nothing else to publish the control would
+  // read "up to date" and then hide, so it says what GitHub is missing instead.
+  const unsyncedApiReferencePages = exactStatusUpToDate
+    ? publishStatus?.unsynced_api_reference_page_count ?? 0
+    : 0
+  if (
+    exactStatusUpToDate &&
+    !upToDateVisible &&
+    !pullRequest &&
+    unsyncedApiReferencePages === 0
+  ) {
+    return null
+  }
 
   return (
     <div className={cn("shrink-0 space-y-1 border-t border-border pt-3", className)}>
@@ -340,6 +410,16 @@ export function WorkspaceGitHubPublish({
           <span>Checking GitHub…</span>
           <LoadingBar label="GitHub status check progress" className="w-full max-w-32" />
         </div>
+      ) : unsyncedApiReferencePages > 0 ? (
+        <div
+          className="flex min-h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-center text-xs font-medium text-muted-foreground"
+          title="These API reference pages were imported rather than generated from an OpenAPI definition in the repository, so GitHub never updates them. Point the API Reference at the folder generated from reference/ and remove them."
+        >
+          <AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          {unsyncedApiReferencePages === 1
+            ? "1 API reference page isn't in GitHub"
+            : `${unsyncedApiReferencePages} API reference pages aren't in GitHub`}
+        </div>
       ) : upToDateVisible ? (
         <div
           className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground"
@@ -383,26 +463,50 @@ export function WorkspaceGitHubPublish({
           Publishing unavailable
         </Button>
       ) : (
-        <Button
-          type="button"
-          size="sm"
-          className="w-full justify-center"
-          disabled={Boolean(disabledReason)}
-          aria-describedby={disabledReason ? helperId : undefined}
-          title={
-            disabledReason ??
-            (pullRequest
-              ? "Add the latest workspace changes to the open pull request"
-              : "Publish workspace changes through GitHub review")
-          }
-          onClick={() => {
-            setError(null)
-            setConfirmOpen(true)
-          }}
-        >
-          <Upload className="size-3.5" />
-          {pullRequest ? "Update pull request" : "Publish workspace"}
-        </Button>
+        <>
+          <Button
+            type="button"
+            size="sm"
+            className="w-full justify-center"
+            disabled={Boolean(disabledReason)}
+            aria-describedby={disabledReason ? helperId : undefined}
+            title={
+              disabledReason ??
+              (namedBranch
+                ? `Add the latest workspace changes to ${namedBranch}`
+                : pullRequest
+                  ? "Add the latest workspace changes to the open pull request"
+                  : "Publish workspace changes through GitHub review")
+            }
+            onClick={() => openConfirm("default")}
+          >
+            <Upload className="size-3.5 shrink-0" />
+            <span className="truncate">
+              {namedBranch
+                ? `Save to ${namedBranch}`
+                : pullRequest
+                  ? "Update pull request"
+                  : "Publish workspace"}
+            </span>
+          </Button>
+          {canChooseBranch ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full justify-center"
+              disabled={Boolean(disabledReason)}
+              title={
+                disabledReason ??
+                `Keep these changes on a branch of their own until they are reviewed and merged into ${syncedBranch ?? "the synced branch"}`
+              }
+              onClick={() => openConfirm("branch")}
+            >
+              <GitBranch className="size-3.5 shrink-0" />
+              Save to branch
+            </Button>
+          ) : null}
+        </>
       )}
 
       {disabledReason ? (
@@ -438,6 +542,19 @@ export function WorkspaceGitHubPublish({
         </p>
       ) : null}
 
+      {workingBranch ? (
+        <Link
+          href={REVIEW_PATH}
+          title="Review what the branch changes and merge it"
+          className="flex h-6 w-full items-center justify-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <GitBranch className="size-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">
+            {namedBranch ? `Review ${namedBranch}` : "Review changes"}
+          </span>
+        </Link>
+      ) : null}
+
       {pullRequest ? (
         <a
           href={pullRequest.url}
@@ -469,12 +586,26 @@ export function WorkspaceGitHubPublish({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {pullRequest
-                ? "Update the workspace pull request?"
-                : "Publish workspace changes?"}
+              {namedBranch
+                ? `Save changes to ${namedBranch}?`
+                : toBranch
+                  ? "Save changes to a new branch?"
+                  : pullRequest
+                  ? "Update the workspace pull request?"
+                  : "Publish workspace changes?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {directCommit ? (
+              {namedBranch || toBranch ? (
+                <>
+                  Breezify will compare all linked documents in{" "}
+                  {source.repo_full_name} and{" "}
+                  {namedBranch
+                    ? `add every saved change to the ${namedBranch} branch`
+                    : "put every saved change on a new branch, as a draft pull request"}
+                  . The {source.branch ?? "default"} branch will not change until
+                  that branch is merged.
+                </>
+              ) : directCommit ? (
                 <>
                   Breezify will compare all linked documents in{" "}
                   {source.repo_full_name} and commit every saved change straight
@@ -492,13 +623,50 @@ export function WorkspaceGitHubPublish({
             </AlertDialogDescription>
           </AlertDialogHeader>
 
+          {toBranch ? (
+            <div className="space-y-1">
+              <label htmlFor={branchInputId} className="text-sm font-medium">
+                Branch name
+              </label>
+              <div className="flex h-8 w-full items-center rounded-md border border-border bg-background font-mono text-xs focus-within:ring-2 focus-within:ring-ring/50">
+                {branchPrefix ? (
+                  <span className="shrink-0 pl-2 text-muted-foreground" aria-hidden="true">
+                    {branchPrefix}
+                  </span>
+                ) : null}
+                <input
+                  id={branchInputId}
+                  value={branchName}
+                  onChange={(event) => setBranchName(event.target.value)}
+                  disabled={publishing}
+                  autoFocus
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="my-change"
+                  aria-invalid={Boolean(branchNameProblem && requestedBranch)}
+                  className={cn(
+                    "h-full min-w-0 flex-1 bg-transparent pr-2 outline-none",
+                    branchPrefix ? "pl-0" : "pl-2",
+                  )}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {branchNameProblem && requestedBranch
+                  ? branchNameProblem
+                  : requestedBranch
+                    ? `Creates ${requestedBranch} from ${syncedBranch ?? "the synced branch"}. Later changes are saved to it until it is merged.`
+                    : "Later changes are saved to this branch until it is merged. Review and merge it from the sidebar."}
+              </p>
+            </div>
+          ) : null}
+
           {source.conflict_count > 0 ? (
             <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               <p>
                 {source.conflict_count} linked document
                 {source.conflict_count === 1 ? " has" : "s have"} changes in
-                both GitHub and Breezify. This {directCommit ? "commit will write" : "pull request will propose"} the Breezify
+                both GitHub and Breezify. This {directCommit && !toBranch ? "commit will write" : "pull request will propose"} the Breezify
                 versions for those files. Review those conflicts before continuing.
               </p>
             </div>
@@ -516,7 +684,9 @@ export function WorkspaceGitHubPublish({
           {publishing ? (
             <LoadingBar
               label={
-                directCommit
+                namedBranch || toBranch
+                  ? "Branch save progress"
+                  : directCommit
                   ? "GitHub commit progress"
                   : pullRequest
                     ? "Pull request update progress"
@@ -528,13 +698,19 @@ export function WorkspaceGitHubPublish({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={publishing}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={publishing}
+              disabled={publishing || Boolean(branchNameProblem)}
               onClick={(event) => {
                 event.preventDefault()
                 void publish()
               }}
             >
-              {directCommit
+              {namedBranch || toBranch
+                ? publishing
+                  ? "Saving to branch"
+                  : namedBranch
+                    ? `Save to ${namedBranch}`
+                    : "Create branch"
+                : directCommit
                 ? publishing
                   ? "Committing to GitHub"
                   : "Commit to GitHub"

@@ -6,6 +6,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { groupBranchesByVersion } from '@/lib/github/branch-groups'
 import { getInstallationToken, listRepositoryBranches } from '@/lib/github/github'
+import { readmeWorkingBranch } from '@/lib/github/readme/readme-branch-name'
 import { GitHubApiError, withGitHubRetry } from '@/lib/github/retry'
 
 export const runtime = 'nodejs'
@@ -50,6 +51,7 @@ export async function GET(): Promise<NextResponse> {
     const groups = groupBranchesByVersion(listed.branches, {
       defaultBranch: listed.defaultBranch,
       syncedBranch,
+      workingBranch: readmeWorkingBranch(source),
     })
     return NextResponse.json(
       {

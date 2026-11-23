@@ -1,7 +1,8 @@
-import type {
-  PublicDocWithContent,
-  PublicTaxonomy,
-  PublicWorkspace,
+import {
+  portalScopeTargetsDeleted,
+  type PublicDocWithContent,
+  type PublicTaxonomy,
+  type PublicWorkspace,
 } from "@/lib/public-kb"
 import { renderApiReferenceHtmlCached } from "@/lib/public-kb-render-cache"
 import {
@@ -124,6 +125,12 @@ export async function PortalApiReferenceView({
         })),
       }
     : null
+  // An empty reference whose own content was deleted says so. A page that
+  // follows Home (scope null) never had content of its own to lose.
+  const contentDeleted =
+    documents.length === 0 && page.scope !== null
+      ? await portalScopeTargetsDeleted(workspace.id, page.scope)
+      : false
 
   return (
     <>
@@ -133,6 +140,7 @@ export async function PortalApiReferenceView({
         brandName={theme.brandName}
         items={items}
         active={activeSection}
+        contentDeleted={contentDeleted}
         disablePrefetch={preview}
         editable={preview}
         updated={updated}

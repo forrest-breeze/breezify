@@ -28,12 +28,15 @@ import {
   isApiReferencePage,
   readmeFolderMetadata,
   readmeSectionOf,
+  README_MAX_PAGE_BYTES,
   readReadmeDocumentLink,
   readReadmeFolderLink,
   readReadmeSyncState,
   relativeReadmePath,
   type ReadmeSyncState,
 } from './readme-layout'
+import { BREEZIFY_BRANCH_NAMESPACE, isValidReadmeBranchName } from './readme-branch-name'
+import { canonicalReadmeMarkdown } from './readme-preserve'
 import { parseSpecDocument } from './readme-sync'
 import type { ReadmeStore, ReadmeStoreDocument } from './readme-store'
 
@@ -100,10 +103,23 @@ export class ReadmePublishError extends Error {
 export const README_PUBLISH_BRANCH_PREFIX = 'breezify/readme-sync-'
 export const README_DIFF_MAX_FILES = 60
 export const README_DIFF_MAX_BYTES = 256_000
+/** Repository files read at once to keep the unedited source of edited pages. */
+const SOURCE_READ_CONCURRENCY = 6
 
+/**
+ * Whether a recorded publish branch is this format's working branch: one
+ * Breezify created to hold workspace changes, named by Breezify
+ * (`breezify/readme-sync-...`) or by the person who saved to it
+ * (`v1.6_pricing`). Anything else under `breezify/` belongs to the other
+ * repository format, whose pointer a link can still carry.
+ */
 export function isReadmePublishBranch(head: string | null | undefined): boolean {
-  return Boolean(head && head.startsWith(README_PUBLISH_BRANCH_PREFIX))
+  const name = head?.trim()
+  if (!name) return false
+  return name.startsWith(README_PUBLISH_BRANCH_PREFIX) || !name.startsWith(BREEZIFY_BRANCH_NAMESPACE)
 }
+
+export { isValidReadmeBranchName }
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
@@ -131,6 +147,12 @@ export async function loadReadmeExportInput(
   documents: ReadmeExportDocument[]
   specs: ReadmeExportSpec[]
   storeDocuments: ReadmeStoreDocument[]
+  /**
+   * API reference pages that are not generated from a definition: imported or
+   * written by hand. The sync never writes or reads them, so GitHub can be "up
+   * to date" while they differ from the repository's definition.
+   */
+  unsyncedApiReferencePageCount: number
 }> {
   const [folders, documents, specs] = await Promise.all([
     store.listFolders(),
@@ -149,8 +171,14 @@ export async function loadReadmeExportInput(
   const restrictedIds = new Set(
     folders.filter((folder) => folder.restricted).map((folder) => folder.id),
   )
+  const unsyncedApiReferencePageCount = documents.filter(
+    (document) =>
+      isApiReferencePage(document.metadata) &&
+      !(document.folderId !== null && restrictedIds.has(document.folderId)),
+  ).length
   return {
     storeDocuments: documents,
+    unsyncedApiReferencePageCount,
     folders: exported.map((folder) => ({
       id: folder.id,
       displayName: folder.displayName,
@@ -214,6 +242,7 @@ interface Comparison {
   pullRequest: { number: number; url: string; branch: string } | null
   plan: ReadmeExportPlan
   storeDocuments: ReadmeStoreDocument[]
+  unsyncedApiReferencePageCount: number
   state: ReadmeSyncState
 }
 
@@ -279,7 +308,9 @@ async function resolveComparison(
   let pullRequest: Comparison['pullRequest'] = null
   const state = readReadmeSyncState(source.syncState, source.root)
   let managedPaths = state.managed_paths
-  if (source.publishMode === 'pull_request' && isReadmePublishBranch(source.publishPullRequestHead)) {
+  // An open working branch is where changes go next, whichever way this link
+  // publishes otherwise.
+  if (isReadmePublishBranch(source.publishPullRequestHead)) {
     const prBranch = source.publishPullRequestHead!
     const [open, reference] = await Promise.all([
       retry(() =>
@@ -316,7 +347,7 @@ async function resolveComparison(
     sizes.set(entry.path, entry.size ?? 0)
   }
   const exported = await loadReadmeExportInput(deps.store, source.repoId, deps.toMarkdown)
-  const complete = planReadmeExport({
+  const planInput: Parameters<typeof planReadmeExport>[0] = {
     root: source.root,
     folders: exported.folders,
     documents: exported.documents,
@@ -324,7 +355,32 @@ async function resolveComparison(
     tree,
     state: { ...state, managed_paths: managedPaths },
     includeConflicts: options.includeConflicts,
-  })
+    canonical: (markdown) => canonicalReadmeMarkdown(markdown, deps.toMarkdown),
+  }
+  let complete = planReadmeExport(planInput)
+  if (complete.sourcePaths.length > 0) {
+    // Pages edited in Breezify: read their files so only what was edited is
+    // rewritten. A file that cannot be read is written whole, as before.
+    const previousContent = new Map<string, string>()
+    const readable = complete.sourcePaths.filter(
+      (path) => (sizes.get(path) ?? 0) <= README_MAX_PAGE_BYTES,
+    )
+    for (let start = 0; start < readable.length; start += SOURCE_READ_CONCURRENCY) {
+      await Promise.all(
+        readable.slice(start, start + SOURCE_READ_CONCURRENCY).map(async (path) => {
+          try {
+            const blob = await retry(() =>
+              github.getBlob(token, source.repoFullName, tree.get(path)!),
+            )
+            previousContent.set(path, Buffer.from(blob.content, 'base64').toString('utf8'))
+          } catch {
+            // Left out: the page is written whole.
+          }
+        }),
+      )
+    }
+    complete = planReadmeExport({ ...planInput, previousContent })
+  }
   let plan: ReadmeExportPlan
   try {
     plan = selectReadmeExportPlan(complete, options.selectedPaths)
@@ -347,6 +403,7 @@ async function resolveComparison(
     pullRequest,
     plan,
     storeDocuments: exported.storeDocuments,
+    unsyncedApiReferencePageCount: exported.unsyncedApiReferencePageCount,
     state,
   }
 }
@@ -358,6 +415,8 @@ export interface ReadmePublishInspection {
   deletedFileCount: number
   unchangedFileCount: number
   conflictCount: number
+  /** See loadReadmeExportInput. Reported so "up to date" is not misleading. */
+  unsyncedApiReferencePageCount: number
   comparedCommitSha: string | null
   comparisonKey: string | null
   pullRequestUpToDate?: boolean
@@ -389,6 +448,7 @@ export async function inspectReadmePublish(
       deletedFileCount: plan.deletes.length,
       unchangedFileCount: plan.unchangedCount,
       conflictCount: plan.conflictCount,
+      unsyncedApiReferencePageCount: comparison.unsyncedApiReferencePageCount,
       comparedCommitSha: comparison.base.sha,
       comparisonKey: comparisonKey(plan, comparison.base.sha),
       pullRequestUpToDate: comparison.pullRequest ? changed === 0 : undefined,
@@ -403,6 +463,7 @@ export async function inspectReadmePublish(
       deletedFileCount: 0,
       unchangedFileCount: 0,
       conflictCount: 0,
+      unsyncedApiReferencePageCount: 0,
       comparedCommitSha: typeof current === 'string' ? current : null,
       comparisonKey: null,
       code: error.code,
@@ -645,6 +706,12 @@ export async function publishReadmeWorkspace(
     selectedPaths?: string[]
     message?: string
     /**
+     * Save to a new working branch with this name instead of publishing the
+     * usual way. It is cut from the synced branch and opens as a draft pull
+     * request; later publishes add to it until it is merged or closed.
+     */
+    branch?: string
+    /**
      * People to credit on the commit, given the documents it writes. Looked up
      * only once there is something to commit.
      */
@@ -654,6 +721,31 @@ export async function publishReadmeWorkspace(
   const github = resolveDeps(deps)
   const comparison = await resolveComparison(source, deps, options)
   const { plan, token, branch, base, head } = comparison
+  const requestedBranch = options.branch?.trim() || null
+  if (requestedBranch !== null) {
+    if (!isValidReadmeBranchName(requestedBranch)) {
+      throw new ReadmePublishError(
+        'Use letters, numbers, dots, dashes, underscores and slashes for a branch name.',
+        400,
+        'invalid_branch_name',
+      )
+    }
+    if (requestedBranch === branch) {
+      throw new ReadmePublishError(
+        `${branch} is the branch this workspace is synced with. Choose another name.`,
+        409,
+        'branch_is_synced',
+      )
+    }
+    if (comparison.pullRequest && comparison.pullRequest.branch !== requestedBranch) {
+      throw new ReadmePublishError(
+        `Changes are already being saved to ${comparison.pullRequest.branch}. Merge or close it before starting another branch.`,
+        409,
+        'working_branch_open',
+        { branch: comparison.pullRequest.branch },
+      )
+    }
+  }
   const changed = plan.writes.length + plan.deletes.length
   if (changed === 0) {
     throw new ReadmePublishError(
@@ -674,7 +766,10 @@ export async function publishReadmeWorkspace(
       ? `${commitMessage(plan, options.message)}\n\n${trailers.join('\n')}`
       : commitMessage(plan, options.message)
 
-  if (source.publishMode === 'direct') {
+  // A working branch, open or asked for, takes the changes instead of the
+  // synced branch.
+  const onWorkingBranch = comparison.pullRequest !== null || requestedBranch !== null
+  if (source.publishMode === 'direct' && !onWorkingBranch) {
     const commit = await github
       .retry(() =>
         github.createFilesCommit(token, source.repoFullName, {
@@ -702,8 +797,24 @@ export async function publishReadmeWorkspace(
   }
 
   const prBranch =
-    comparison.pullRequest?.branch ?? `${README_PUBLISH_BRANCH_PREFIX}${github.now().toString(36)}`
+    comparison.pullRequest?.branch ??
+    requestedBranch ??
+    `${README_PUBLISH_BRANCH_PREFIX}${github.now().toString(36)}`
   if (!comparison.pullRequest) {
+    if (requestedBranch !== null) {
+      // Never adopt a branch someone else made: its commits are not Breezify's.
+      const existing = await github.retry(() =>
+        github.getBranchReference(token, source.repoFullName, requestedBranch),
+      )
+      if (existing) {
+        throw new ReadmePublishError(
+          `A branch named ${requestedBranch} already exists. Choose another name.`,
+          409,
+          'branch_exists',
+          { branch: requestedBranch },
+        )
+      }
+    }
     await github.retry(() =>
       github.createBranch(token, source.repoFullName, prBranch, head.sha),
     )
@@ -723,15 +834,20 @@ export async function publishReadmeWorkspace(
   const pullRequestArgs = {
     head: prBranch,
     base: branch,
-    title: 'docs: sync from Breezify',
+    title: requestedBranch !== null ? `docs: ${requestedBranch}` : 'docs: sync from Breezify',
     body: [
-      'Publishes the current Breezify workspace to this repository.',
+      requestedBranch !== null
+        ? `Changes saved to \`${requestedBranch}\` from the Breezify workspace.`
+        : 'Publishes the current Breezify workspace to this repository.',
       '',
       `${plan.writes.length} file${plan.writes.length === 1 ? '' : 's'} written; ${plan.deletes.length} deleted.`,
       '',
       'Merge this pull request to make the changes live. Breezify picks the merge up automatically.',
     ].join('\n'),
   }
+  // A branch someone chose to save to is work in progress until they ask
+  // for a review.
+  const wantDraft = source.draftPullRequests === true || requestedBranch !== null
   const createPullRequest = (draft: boolean) =>
     github.retry(() =>
       github.createPullRequest(token, source.repoFullName, {
@@ -741,12 +857,12 @@ export async function publishReadmeWorkspace(
     )
   const pullRequest: { number: number; url: string; branch: string } =
     comparison.pullRequest ??
-    (await createPullRequest(source.draftPullRequests === true)
+    (await createPullRequest(wantDraft)
       .catch((error: unknown) => {
         // Some repositories (private ones on plans without drafts) reject a
         // draft outright. The publish still has to land, so open it normally.
         const draftUnsupported =
-          source.draftPullRequests === true &&
+          wantDraft &&
           error instanceof GitHubApiError &&
           error.status === 422 &&
           /draft/i.test(error.message)

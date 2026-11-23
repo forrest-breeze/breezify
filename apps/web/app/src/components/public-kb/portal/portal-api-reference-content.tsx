@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { PortalEditDocumentButton } from "@/components/public-kb/portal/portal-edit-document-button"
-import { ChevronLeft, ChevronRight, FileCode2, List } from "lucide-react"
+import { ChevronLeft, ChevronRight, FileCode2, FileX2, List } from "lucide-react"
 import { useDocumentHeadings } from "@/hooks/use-document-headings"
 import { HoverPrefetchLink } from "@/components/ui/hover-prefetch-link"
 import { KbReadingToc } from "@/components/kb/kb-reading-toc"
@@ -46,6 +46,11 @@ interface PortalApiReferenceContentProps {
   items: ApiReferenceNavItem[]
   /** The endpoint this URL renders; null only when the page has no docs. */
   active: ApiReferenceSection | null
+  /**
+   * The page has no docs because the folders and documents it showed were
+   * deleted. Only meaningful when `active` is null.
+   */
+  contentDeleted?: boolean
   /** True inside the builder preview, where hrefs are preview routes worth no prefetch. */
   disablePrefetch?: boolean
   updated?: string
@@ -107,6 +112,7 @@ export function PortalApiReferenceContent({
   brandName,
   items,
   active,
+  contentDeleted = false,
   disablePrefetch = false,
   editable = false,
   updated = "",
@@ -310,7 +316,7 @@ export function PortalApiReferenceContent({
                     {active.path}
                   </code>
                 ) : null}
-                {active ? null : (
+                {active || contentDeleted ? null : (
                   <p className="mt-4 max-w-3xl text-base leading-7 text-muted-foreground">
                     Explore {brandName} endpoints, authentication, and
                     integration guides.
@@ -346,6 +352,21 @@ export function PortalApiReferenceContent({
                   <PublicProse html={active.examplesHtml} />
                 </aside>
               ) : null}
+            </div>
+          ) : contentDeleted ? (
+            <div
+              role="status"
+              className="rounded-xl border border-dashed border-border bg-muted/15 px-6 py-14 text-center"
+            >
+              <FileX2 className="mx-auto size-7 text-muted-foreground" />
+              <h2 className="mt-4 text-lg font-semibold">
+                This API reference was deleted
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {editable
+                  ? "The folder this page showed no longer exists. Choose new content for the page in the portal editor, or remove the page."
+                  : "Its content is no longer available."}
+              </p>
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-border bg-muted/15 px-6 py-14 text-center">

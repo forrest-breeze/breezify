@@ -37,6 +37,7 @@ import {
 import { safeJsonBody } from '@/lib/validation'
 import { linkReadmeRepository } from '@/lib/github/readme/readme-link'
 import {
+  awaitsReadmeWorkspaceReset,
   isReadmeFormatSource,
   reconcileReadmePublishPullRequest,
   syncReadmeSource,
@@ -443,6 +444,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     source = await reconcileWorkspacePublishPullRequest(admin, source)
     if (isReadmeFormatSource(source)) {
       source = await reconcileReadmePublishPullRequest(source, admin)
+      // A working branch was closed or deleted on GitHub: put the workspace
+      // back on the synced branch now, not when the next push arrives.
+      if (awaitsReadmeWorkspaceReset(source)) {
+        scheduleHostedDocsSync(
+          hostedTarget(source),
+          origin,
+          'workspace reset after a discarded working branch failed',
+        )
+      }
     }
 
     // Every editor and settings poll only needs the persisted source state.

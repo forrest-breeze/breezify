@@ -44,6 +44,8 @@ export class FakeRepository {
   /** Set to make the repository reject draft pull requests, as some plans do. */
   draftsUnsupported = false
   blobReads: string[] = []
+  /** Set to make every blob read fail, as when GitHub is unreachable. */
+  blobsUnavailable = false
   private readonly commits = new Map<string, FakeCommit>()
   private readonly trees = new Map<string, Map<string, string>>()
   private readonly blobs = new Map<string, { content: string; path: string }>()
@@ -157,6 +159,7 @@ export class FakeRepository {
         }
       },
       getBlob: async (_token, _repo, blobSha) => {
+        if (this.blobsUnavailable) throw new GitHubApiError('GitHub API responded 503', 503)
         const blob = this.blobs.get(blobSha)!
         this.blobReads.push(blob.path)
         return {

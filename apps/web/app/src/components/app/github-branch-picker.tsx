@@ -6,19 +6,23 @@ import useSWR from "swr"
 import { Check, ExternalLink, GitBranch, Search, Tag } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useGithubHostedDocs } from "@/hooks/swr"
+import { useHasHydrated } from "@/hooks/use-has-hydrated"
 import {
   compactAge,
   filterBranchGroups,
   type BranchEntry,
   type BranchGroups,
 } from "@/lib/github/branch-groups"
+import { readmeWorkingBranch } from "@/lib/github/readme/readme-branch-name"
 import { cn } from "@/lib/utils"
 
 // ---------------------------------------------------------------------------
 // The version pill in the Knowledge sidebar header. It names the branch
 // this workspace is synced with and opens ReadMe's two-pane picker: the
 // repository's versions on the left, the branches cut from the selected
-// version on the right. Read-only: every branch opens on GitHub.
+// version on the right. Every branch opens on GitHub; the working branch, the
+// one workspace changes are being saved to, is shown beside the version and
+// opens its review.
 // ---------------------------------------------------------------------------
 
 interface BranchesResponse extends BranchGroups {
@@ -31,8 +35,7 @@ interface BranchesResponse extends BranchGroups {
 
 const BRANCHES_PATH = "/api/github/hosted-docs/branches"
 const SETTINGS_PATH = "/settings/integrations/github"
-/** Key of the left-pane entry for branches that belong to no version. */
-const OTHER_KEY = "other"
+const REVIEW_PATH = "/editor/review"
 
 async function loadBranches(url: string): Promise<BranchesResponse> {
   const response = await fetch(url)
@@ -45,18 +48,13 @@ function branchUrl(repoFullName: string, name: string): string {
   return `https://github.com/${repoFullName}/tree/${name.split("/").map(encodeURIComponent).join("/")}`
 }
 
-const versionKey = (name: string): string => `version:${name}`
-
-/** The left-pane entry holding the synced branch, else the default version. */
-function homeKey(groups: BranchGroups): string | null {
-  for (const version of groups.versions) {
-    if (version.synced || version.branches.some((branch) => branch.synced)) {
-      return versionKey(version.name)
-    }
-  }
-  if (groups.other.some((branch) => branch.synced)) return OTHER_KEY
-  const fallback = groups.versions.find((version) => version.isDefault)
-  return fallback ? versionKey(fallback.name) : null
+/** The version holding the synced branch, else the default version. */
+function homeVersion(groups: BranchGroups): string | null {
+  const home =
+    groups.versions.find(
+      (version) => version.synced || version.branches.some((branch) => branch.synced),
+    ) ?? groups.versions.find((version) => version.isDefault)
+  return home?.name ?? null
 }
 
 const rowClass =
@@ -79,7 +77,7 @@ function VersionRow({
   onSelect,
 }: {
   label: string
-  isDefault?: boolean
+  isDefault: boolean
   synced: boolean
   selected: boolean
   onSelect: () => void
@@ -108,11 +106,31 @@ function VersionRow({
 function BranchRow({
   branch,
   repoFullName,
+  onNavigate,
 }: {
   branch: BranchEntry
   repoFullName: string
+  onNavigate: () => void
 }): React.JSX.Element {
   const age = compactAge(branch.updatedAt)
+  // The working branch is the one this workspace is on: it opens its review
+  // here, not the branch on GitHub.
+  if (branch.working) {
+    return (
+      <li>
+        <Link
+          href={REVIEW_PATH}
+          onClick={onNavigate}
+          title={[branch.name, "Saving changes here", "Open the review"].join(" · ")}
+          className={cn(rowClass, "bg-muted/60")}
+        >
+          <GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+          <span className="shrink-0 text-xs font-medium">Review</span>
+        </Link>
+      </li>
+    )
+  }
   return (
     <li>
       <a
@@ -152,7 +170,11 @@ export function GithubBranchPicker({
   const source = hostedDocs?.source ?? null
   const linked = Boolean(source && source.format === "readme" && source.sync_status !== "disabled")
   const { data, error, isLoading } = useSWR<BranchesResponse>(
-    linked ? BRANCHES_PATH : null,
+    // Keyed by the working branch, so starting or merging one reads the
+    // repository's branches again.
+    linked
+      ? `${BRANCHES_PATH}?working=${encodeURIComponent(readmeWorkingBranch(source) ?? "")}`
+      : null,
     loadBranches,
     { revalidateOnFocus: false, dedupingInterval: 60_000 },
   )
@@ -166,22 +188,28 @@ export function GithubBranchPicker({
     () => (data?.linked ? filterBranchGroups(data, query) : null),
     [data, query],
   )
-  const home = useMemo(() => (data?.linked ? homeKey(data) : null), [data])
-  if (!linked || !source) return null
+  const home = useMemo(() => (data?.linked ? homeVersion(data) : null), [data])
+  // The server has no SWR data and renders nothing; the cache restored from
+  // localStorage would render the pill on the first client pass.
+  const hydrated = useHasHydrated()
+  if (!hydrated || !linked || !source) return null
 
   const current = source.branch ?? data?.synced_branch ?? null
+  const workingBranch = readmeWorkingBranch(source)
+  // `v1.6_pricing` beside `v1.6` reads as `pricing`.
+  const workingLabel =
+    workingBranch && current && /^[_/]/.test(workingBranch.slice(current.length)) &&
+    workingBranch.startsWith(current)
+      ? workingBranch.slice(current.length + 1)
+      : workingBranch
   const repo = data?.repo_full_name ?? source.repo_full_name
-  const keys = groups
-    ? [
-        ...groups.versions.map((version) => versionKey(version.name)),
-        ...(groups.other.length > 0 ? [OTHER_KEY] : []),
-      ]
-    : []
-  const activeKey = [selected, home].find((key) => key && keys.includes(key)) ?? keys[0] ?? null
+  const versions = groups?.versions ?? []
   const activeVersion =
-    groups?.versions.find((version) => versionKey(version.name) === activeKey) ?? null
-  const activeBranches = activeVersion?.branches ?? (activeKey === OTHER_KEY ? groups?.other : null) ?? []
-  const otherLabel = groups?.versions.length ? "Other branches" : "All branches"
+    [selected, home]
+      .map((name) => versions.find((version) => version.name === name))
+      .find(Boolean) ??
+    versions[0] ??
+    null
 
   const onOpenChange = (next: boolean): void => {
     setOpen(next)
@@ -198,10 +226,23 @@ export function GithubBranchPicker({
           "inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-border bg-background px-2.5 text-xs font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           className,
         )}
-        aria-label={`Versions and branches${current ? `, synced with ${current}` : ""}`}
+        aria-label={`Versions and branches${current ? `, synced with ${current}` : ""}${
+          workingBranch ? `, saving to ${workingBranch}` : ""
+        }`}
       >
         <Tag className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <span className="truncate font-mono">{current ?? "default branch"}</span>
+        <span className="shrink-0 font-mono">{current ?? "default branch"}</span>
+        {workingBranch ? (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">
+              ›
+            </span>
+            <GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="truncate font-mono" title={workingBranch}>
+              {workingLabel}
+            </span>
+          </>
+        ) : null}
       </PopoverTrigger>
       <PopoverContent
         align={align}
@@ -221,42 +262,45 @@ export function GithubBranchPicker({
           />
         </label>
 
+        {workingBranch ? (
+          <Link
+            href={REVIEW_PATH}
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 border-b border-border px-3.5 py-2 text-xs hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+          >
+            <GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="min-w-0 truncate">
+              Saving changes to <span className="font-mono">{workingBranch}</span>
+            </span>
+            <span className="ml-auto shrink-0 font-medium">Review</span>
+          </Link>
+        ) : null}
+
         {error ? (
           <p role="alert" className="px-3.5 py-8 text-center text-xs text-destructive">
             {error instanceof Error ? error.message : "Could not load branches."}
           </p>
         ) : isLoading || !groups ? (
           <p className="px-3.5 py-8 text-center text-xs text-muted-foreground">Loading branches…</p>
-        ) : keys.length === 0 ? (
+        ) : !activeVersion ? (
           <p className="px-3.5 py-8 text-center text-xs text-muted-foreground">
-            No branch matches that search.
+            {query.trim() ? "No branch matches that search." : "No versions yet."}
           </p>
         ) : (
           <div className="flex max-h-72 min-h-40">
             <section aria-label="Versions" className="flex w-2/5 min-w-0 flex-col border-r border-border">
               <PaneHeading>Versions</PaneHeading>
               <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-1.5">
-                {groups.versions.map((version) => {
-                  const key = versionKey(version.name)
-                  return (
-                    <VersionRow
-                      key={key}
-                      label={version.name}
-                      isDefault={version.isDefault}
-                      synced={key === home}
-                      selected={key === activeKey}
-                      onSelect={() => setSelected(key)}
-                    />
-                  )
-                })}
-                {groups.other.length > 0 ? (
+                {versions.map((version) => (
                   <VersionRow
-                    label={otherLabel}
-                    synced={home === OTHER_KEY}
-                    selected={activeKey === OTHER_KEY}
-                    onSelect={() => setSelected(OTHER_KEY)}
+                    key={version.name}
+                    label={version.name}
+                    isDefault={version.isDefault}
+                    synced={version.name === home}
+                    selected={version === activeVersion}
+                    onSelect={() => setSelected(version.name)}
                   />
-                ) : null}
+                ))}
               </ul>
               {data?.truncated ? (
                 <p className="px-3.5 pb-2 text-[11px] leading-4 text-muted-foreground">
@@ -266,35 +310,36 @@ export function GithubBranchPicker({
             </section>
 
             <section
-              aria-label={activeVersion ? `Branches in ${activeVersion.name}` : otherLabel}
+              aria-label={`Branches in ${activeVersion.name}`}
               className="flex min-w-0 flex-1 flex-col"
             >
               <PaneHeading>
-                <span className="truncate">
-                  {activeVersion ? `Branches in ${activeVersion.name}` : otherLabel}
-                </span>
-                {activeVersion ? (
-                  <a
-                    href={branchUrl(repo, activeVersion.name)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={`Open ${activeVersion.name} on GitHub`}
-                    title={`Open ${activeVersion.name} on GitHub`}
-                    className="shrink-0 rounded p-0.5 hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
-                  >
-                    <ExternalLink className="size-3" aria-hidden="true" />
-                  </a>
-                ) : null}
+                <span className="truncate">Branches in {activeVersion.name}</span>
+                <a
+                  href={branchUrl(repo, activeVersion.name)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Open ${activeVersion.name} on GitHub`}
+                  title={`Open ${activeVersion.name} on GitHub`}
+                  className="shrink-0 rounded p-0.5 hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
+                >
+                  <ExternalLink className="size-3" aria-hidden="true" />
+                </a>
               </PaneHeading>
-              {activeBranches.length > 0 ? (
+              {activeVersion.branches.length > 0 ? (
                 <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-1.5">
-                  {activeBranches.map((branch) => (
-                    <BranchRow key={branch.name} branch={branch} repoFullName={repo} />
+                  {activeVersion.branches.map((branch) => (
+                    <BranchRow
+                      key={branch.name}
+                      branch={branch}
+                      repoFullName={repo}
+                      onNavigate={() => setOpen(false)}
+                    />
                   ))}
                 </ul>
               ) : (
                 <p className="px-3.5 py-1.5 text-xs text-muted-foreground">
-                  No branches in {activeVersion?.name ?? "this list"} yet.
+                  No branches in {activeVersion.name} yet.
                 </p>
               )}
             </section>

@@ -50,6 +50,11 @@ export interface EditorPageRoot {
   docTargetFolderId: string | null | undefined
   /** The same for a folder. */
   folderTargetFolderId: string | null | undefined
+  /**
+   * The page names folders or documents in its scope and none of them exists
+   * any more: its content was deleted.
+   */
+  contentDeleted: boolean
 }
 
 export interface EditorPageRootTree<F, D> {
@@ -101,9 +106,10 @@ function folderEntryOf(
 }
 
 /**
- * Folders whose parent chain loops back on itself. The folders API only stops
- * a folder from being its own parent, so two concurrent moves can still make a
- * loop, and the scope-tree helpers would never finish walking one.
+ * Folders whose parent chain loops back on itself. The database rejects a move
+ * that would close a loop, but it checks each move against committed rows, so
+ * two concurrent moves could still make one, and the scope-tree helpers would
+ * never finish walking it.
  */
 function cyclicFolderIds(folders: readonly TreeFolder[]): Set<string> {
   const parentById = new Map(folders.map((folder) => [folder.id, folder.parent_folder_id]))
@@ -147,8 +153,29 @@ export function buildEditorPageRoots<F extends TreeFolder, D extends TreeDoc>(in
   const eligibleDocIds = new Set(scopeContext.docs.map((doc) => doc.id))
   const hiddenFolderIds = new Set<string>()
 
+  // What still exists, to tell a page whose content was deleted from one that
+  // is merely empty. Folders: every user folder; documents: every document.
+  const existingFolderIds = new Set(folders.map((folder) => folder.id))
+  const existingDocIds = new Set([
+    ...scopeContext.docs.map((doc) => doc.id),
+    ...docs.map((doc) => doc.id),
+  ])
+  const targetsDeleted = (scope: PortalScopeEntry[] | null): boolean => {
+    const named = (scope ?? []).flatMap((entry) => {
+      if (typeof entry === "object" && entry !== null && "doc" in entry) {
+        return [existingDocIds.has(entry.doc)]
+      }
+      const folder = folderEntryOf(entry)
+      return folder ? [existingFolderIds.has(folder.id)] : []
+    })
+    return named.length > 0 && named.every((exists) => !exists)
+  }
+
   const makeGroup = (
-    root: Omit<EditorPageRoot, "docTargetFolderId" | "folderTargetFolderId">,
+    root: Omit<
+      EditorPageRoot,
+      "docTargetFolderId" | "folderTargetFolderId" | "contentDeleted"
+    >,
     scope: PortalScopeEntry[] | null,
     hideScopeFolders: boolean,
   ): Group => {
@@ -169,6 +196,7 @@ export function buildEditorPageRoots<F extends TreeFolder, D extends TreeDoc>(in
           scope === null ? null : only && !only.explicitDocs ? only.id : undefined,
         folderTargetFolderId:
           scope === null ? null : only && !only.rootOnly ? only.id : undefined,
+        contentDeleted: targetsDeleted(scope),
       },
       scope,
       view: createScopeTreeView(scope, ctx),
@@ -205,6 +233,7 @@ export function buildEditorPageRoots<F extends TreeFolder, D extends TreeDoc>(in
       presentation: null,
       docTargetFolderId: undefined,
       folderTargetFolderId: undefined,
+      contentDeleted: false,
     },
     scope: [],
     view: null,

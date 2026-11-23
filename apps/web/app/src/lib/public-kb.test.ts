@@ -21,6 +21,7 @@ import {
   getPublicFolderDetail,
   isScopeProvided,
   normalizeScopeKey,
+  portalScopeTargetsDeleted,
   searchPublic,
   searchPublicForQuestion,
   visibleDocFilter,
@@ -1529,5 +1530,63 @@ describe("searchPublicForQuestion", () => {
     expect(hits).toEqual([])
     // Only the direct-phrase attempt — no keywords survive the stopword filter.
     expect(admin.rpc).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("portalScopeTargetsDeleted", () => {
+  const FOLDER = "00000000-0000-4000-8000-0000000000f1"
+  const DOC = "00000000-0000-4000-8000-0000000000d1"
+
+  function mockTables(found: { folders: string[]; docs: string[] }, error: unknown = null) {
+    const calls: Array<{ table: string; ids: string[] }> = []
+    hoisted.createAdminClient.mockReturnValue({
+      from: vi.fn((table: string) => {
+        let ids: string[] = []
+        const builder = {
+          select: vi.fn(() => builder),
+          eq: vi.fn(() => builder),
+          is: vi.fn(() => builder),
+          in: vi.fn((_column: string, values: string[]) => {
+            ids = values
+            calls.push({ table, ids })
+            return builder
+          }),
+          limit: vi.fn(async () => ({
+            data: error
+              ? null
+              : ids
+                  .filter((id) => (table === "folders" ? found.folders : found.docs).includes(id))
+                  .map((id) => ({ id })),
+            error,
+          })),
+        }
+        return builder
+      }),
+    })
+    return calls
+  }
+
+  beforeEach(() => hoisted.createAdminClient.mockReset())
+
+  it("reports a scope whose folders and documents are all gone", async () => {
+    mockTables({ folders: [], docs: [] })
+    await expect(
+      portalScopeTargetsDeleted("ws-1", [FOLDER, { id: FOLDER, rootOnly: true }, { doc: DOC }]),
+    ).resolves.toBe(true)
+  })
+
+  it("does not report a scope with anything left", async () => {
+    mockTables({ folders: [FOLDER], docs: [] })
+    await expect(portalScopeTargetsDeleted("ws-1", [FOLDER, { doc: DOC }])).resolves.toBe(false)
+    mockTables({ folders: [], docs: [DOC] })
+    await expect(portalScopeTargetsDeleted("ws-1", [FOLDER, { doc: DOC }])).resolves.toBe(false)
+  })
+
+  it("never reports a scope that names nothing, or a failed lookup", async () => {
+    const calls = mockTables({ folders: [], docs: [] })
+    await expect(portalScopeTargetsDeleted("ws-1", [{ workspaceDocs: true }])).resolves.toBe(false)
+    expect(calls).toEqual([])
+    mockTables({ folders: [], docs: [] }, { message: "boom" })
+    await expect(portalScopeTargetsDeleted("ws-1", [FOLDER])).resolves.toBe(false)
   })
 })

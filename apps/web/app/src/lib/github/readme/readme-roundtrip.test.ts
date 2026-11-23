@@ -489,7 +489,12 @@ describe('ReadMe-format GitHub sync: linking a workspace that already has pages'
     const emptied = store.authorFolder('Left behind')
     emptied.sortOrder = 1
 
-    expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0 })
+    // Up to date, but it says the page is one GitHub does not hold.
+    expect(await inspect()).toMatchObject({
+      status: 'up_to_date',
+      changedFileCount: 0,
+      unsyncedApiReferencePageCount: 1,
+    })
     await expect(publish()).rejects.toMatchObject({ code: 'no_changes' })
     expect(repo.files()).toEqual(before)
     // Not linked to a directory that does not exist, so a later sync cannot
@@ -497,6 +502,27 @@ describe('ReadMe-format GitHub sync: linking a workspace that already has pages'
     expect(reference.metadata).toEqual({})
     expect(tag.metadata).toEqual({})
     expect(emptied.metadata).toEqual({})
+  })
+
+  it('counts unsynced API reference pages outside role-restricted folders only', async () => {
+    const { store, sync, inspect } = harness()
+    await sync()
+    expect(await inspect()).toMatchObject({ unsyncedApiReferencePageCount: 0 })
+
+    const internal = store.authorFolder('Internal API')
+    internal.restricted = true
+    const hidden = store.authorDocument({
+      title: 'Rotate keys',
+      content: 'POST /keys/rotate',
+      folderId: internal.id,
+      publicSlug: 'rotate-keys',
+    })
+    hidden.metadata = { api_reference: { format: 'openapi', operation_id: 'rotateKeys' } }
+    expect(await inspect()).toMatchObject({ unsyncedApiReferencePageCount: 0 })
+
+    const loose = store.authorDocument({ title: 'List keys', content: 'GET /keys', publicSlug: 'list-keys' })
+    loose.metadata = { api_reference: { format: 'openapi', operation_id: 'listKeys' } }
+    expect(await inspect()).toMatchObject({ unsyncedApiReferencePageCount: 1 })
   })
 
   it('keeps the pages of a directory deleted on GitHub in the trash when its folder goes', async () => {
@@ -838,6 +864,266 @@ describe('ReadMe-format GitHub sync: pull request mode', () => {
       github_hosted_pending_path: null,
     })
     expect(store.snapshots).toEqual([])
+  })
+})
+
+describe('ReadMe-format GitHub sync: keeping the source of an edited page', () => {
+  // Written the way ReadMe writes a page: a blank line after the frontmatter, a
+  // style block the editor never shows, `***` rules and `*` bullets.
+  const GUIDE_PATH = 'docs/guides/integration-guide.md'
+  const GUIDE = [
+    '---',
+    'title: Integration guide',
+    'hidden: false',
+    '---',
+    '',
+    '<style>{`',
+    '.mermaid-render { text-align: center; }',
+    '`}</style>',
+    '',
+    'This guide covers pay-in and payout.',
+    '',
+    '***',
+    '',
+    '## 1. KYC and risk',
+    '',
+    '* **Before pay-in:** the platform completes its checks.',
+    '  * **Crypto pay-in:** full verification is required.',
+    '* **Before payout:** payout checks are confirmed separately.',
+    '',
+    '***',
+    '',
+    'Contact sales for access.',
+    '',
+  ].join('\n')
+  // The same page as the editor saves it: its own spelling, no style block.
+  const AS_EDITOR_SAVES = [
+    'This guide covers pay-in and payout.',
+    '',
+    '---',
+    '',
+    '## 1. KYC and risk',
+    '',
+    '- **Before pay-in:** the platform completes its checks.',
+    '  - **Crypto pay-in:** full verification is required.',
+    '- **Before payout:** payout checks are confirmed separately.',
+    '',
+    '---',
+    '',
+    'Contact sales for access.',
+  ].join('\n')
+  const files = (guide = GUIDE): Record<string, string> => ({
+    ...readmeRepositoryFiles(),
+    [GUIDE_PATH]: guide,
+  })
+
+  it('rewrites the edited line and nothing else', async () => {
+    const { repo, store, sync, inspect, diff, publish } = harness(files())
+    await sync()
+    const guide = store.document('Integration guide')
+    guide.content = AS_EDITOR_SAVES.replace('## 1. KYC and risk', '## 1. KYC')
+    const expected = GUIDE.replace('## 1. KYC and risk', '## 1. KYC')
+
+    expect((await diff()).files).toEqual([
+      expect.objectContaining({ path: GUIDE_PATH, previous: GUIDE, next: expected }),
+    ])
+    await publish()
+    expect(repo.file(GUIDE_PATH)).toBe(expected)
+
+    // Reading the file back is not a change, although its text is not what
+    // the editor holds: no conflict, no replaced content, nothing to publish.
+    expect(await inspect()).toMatchObject({ status: 'up_to_date' })
+    const content = guide.content
+    expect(await sync({ force: true })).toMatchObject({ preserved: 0 })
+    expect(guide.content).toBe(content)
+    expect(guide.metadata?.github_hosted_conflict).toBe(false)
+    expect(store.snapshots).toEqual([])
+    expect(await inspect()).toMatchObject({ status: 'up_to_date' })
+  })
+
+  it('sees a reverted version as a change and puts the original text back', async () => {
+    const { repo, store, sync, inspect, diff, publish } = harness(files())
+    await sync()
+    const guide = store.document('Integration guide')
+    const imported = guide.content
+    guide.content = AS_EDITOR_SAVES.replace('## 1. KYC and risk', '## 1. KYC')
+    await publish()
+    expect(await inspect()).toMatchObject({ status: 'up_to_date' })
+
+    // "Revert to this version" stores the content from before the edit.
+    guide.content = imported
+    expect(await inspect()).toMatchObject({ status: 'changes', changedFileCount: 1 })
+    expect((await diff()).files).toEqual([
+      expect.objectContaining({ path: GUIDE_PATH, next: GUIDE }),
+    ])
+    await publish()
+    expect(repo.file(GUIDE_PATH)).toBe(GUIDE)
+  })
+
+  it('has nothing to publish when the editor only re-spelled the page', async () => {
+    const { repo, store, sync, inspect, publish } = harness(files())
+    await sync()
+    store.document('Integration guide').content = AS_EDITOR_SAVES
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0 })
+    await expect(publish()).rejects.toMatchObject({ code: 'no_changes' })
+    expect(repo.file(GUIDE_PATH)).toBe(GUIDE)
+  })
+
+  it('keeps the body untouched when only the title changes', async () => {
+    const { repo, store, sync, publish } = harness()
+    await sync()
+    store.document('Quickstart').title = 'Quick start'
+    await publish()
+    // Before, a new title rewrote the body too and the callout became a quote.
+    expect(repo.file('docs/getting-started/quickstart.md')).toBe(
+      QUICKSTART.replace('title: Quickstart\n', 'title: Quick start\n'),
+    )
+  })
+
+  it('keeps Windows line endings', async () => {
+    const { repo, store, sync, publish } = harness(files(GUIDE.replace(/\n/g, '\r\n')))
+    await sync()
+    store.document('Integration guide').content = AS_EDITOR_SAVES.replace('for access', 'to get access')
+    await publish()
+    expect(repo.file(GUIDE_PATH)).toBe(
+      GUIDE.replace('for access', 'to get access').replace(/\n/g, '\r\n'),
+    )
+  })
+
+  it('does the same through a pull request, and takes the merge as its own', async () => {
+    const { repo, store, sync, inspect, publish } = harness(files(), { publishMode: 'pull_request' })
+    await sync()
+    const guide = store.document('Integration guide')
+    guide.content = AS_EDITOR_SAVES.replace('## 1. KYC and risk', '## 1. KYC')
+
+    const result = await publish()
+    expect(repo.file(GUIDE_PATH, result.branch)).toBe(GUIDE.replace('## 1. KYC and risk', '## 1. KYC'))
+    // Compared with the pull request's own copy there is nothing more to add.
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', pullRequestUpToDate: true })
+
+    const content = guide.content
+    repo.merge(result.pullRequestNumber!)
+    expect(await sync()).toMatchObject({ preserved: 0 })
+    expect(guide.content).toBe(content)
+    expect(guide.metadata?.github_hosted_conflict).toBe(false)
+    expect(store.snapshots).toEqual([])
+    expect(await inspect()).toMatchObject({ status: 'up_to_date' })
+  })
+
+  it('still writes the page whole when its file cannot be read', async () => {
+    const { repo, store, sync, publish } = harness(files())
+    await sync()
+    const edited = AS_EDITOR_SAVES.replace('## 1. KYC and risk', '## 1. KYC')
+    store.document('Integration guide').content = edited
+    repo.blobsUnavailable = true
+    await publish()
+    expect(parseReadmeFile(repo.file(GUIDE_PATH)!).body).toBe(`${edited}\n`)
+  })
+})
+
+describe('ReadMe-format GitHub sync: saving to a working branch', () => {
+  const PATH = 'docs/getting-started/quickstart.md'
+
+  it('saves to a named branch instead of the synced one, as a draft pull request', async () => {
+    // This link commits straight to the synced branch otherwise.
+    const { repo, store, sync, inspect, publish } = harness()
+    await sync()
+    store.document('Quickstart').content = 'Edited in Breezify.'
+
+    const saved = await publish({ branch: 'v1.6_pricing' })
+    expect(saved).toMatchObject({ mode: 'pull_request', branch: 'v1.6_pricing', pullRequestNumber: 1 })
+    expect(repo.file(PATH)).toBe(QUICKSTART)
+    expect(parseReadmeFile(repo.file(PATH, 'v1.6_pricing')!).body).toBe('Edited in Breezify.\n')
+    expect(repo.pullRequests).toEqual([
+      expect.objectContaining({ head: 'v1.6_pricing', base: 'main', draft: true, state: 'open' }),
+    ])
+    expect(store.source).toMatchObject({
+      publish_pull_request_number: 1,
+      publish_pull_request_head: 'v1.6_pricing',
+    })
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', pullRequestUpToDate: true })
+  })
+
+  it('keeps saving to the branch while it is open, then goes back to the synced branch', async () => {
+    const { repo, store, sync, inspect, publish } = harness()
+    await sync()
+    const quickstart = store.document('Quickstart')
+    quickstart.content = 'First edit.'
+    await publish({ branch: 'v1.6_pricing' })
+
+    // No branch named: the workspace is on the one it started.
+    quickstart.content = 'Second edit.'
+    expect(await inspect()).toMatchObject({ status: 'changes', changedFileCount: 1 })
+    const again = await publish()
+    expect(again).toMatchObject({ mode: 'pull_request', branch: 'v1.6_pricing', pullRequestNumber: 1 })
+    expect(repo.file(PATH)).toBe(QUICKSTART)
+    expect(parseReadmeFile(repo.file(PATH, 'v1.6_pricing')!).body).toBe('Second edit.\n')
+    expect(repo.pullRequests).toHaveLength(1)
+
+    repo.merge(1)
+    await sync()
+    expect(quickstart.content).toBe('Second edit.')
+    expect(quickstart.metadata?.github_hosted_conflict).toBe(false)
+    expect(await inspect()).toMatchObject({ status: 'up_to_date' })
+
+    quickstart.content = 'Third edit.'
+    expect(await publish()).toMatchObject({ mode: 'direct', branch: 'main' })
+    expect(parseReadmeFile(repo.file(PATH)!).body).toBe('Third edit.\n')
+  })
+
+  it('goes back to the synced branch when the working branch is discarded', async () => {
+    const { repo, store, sync, inspect, publish } = harness()
+    await sync()
+    const quickstart = store.document('Quickstart')
+    const imported = quickstart.content
+    quickstart.content = 'Edited in Breezify.'
+    store.authorDocument({ title: 'Disputes', content: 'How disputes work.', status: 'Published' })
+    await publish({ branch: 'v1.6_pricing' })
+    // One more edit that never reached the branch.
+    store.document('API keys').content = 'Edited after the save.'
+
+    // The branch is deleted on GitHub, which closes its pull request unmerged.
+    repo.pullRequests[0]!.state = 'closed'
+    repo.branches.delete('v1.6_pricing')
+    // What the link does next: one sync that takes GitHub's side everywhere.
+    await sync({ mode: 'replace_breezify' })
+
+    expect(quickstart.content).toBe(imported)
+    expect(store.document('API keys').content).toBe('Rotate keys often.')
+    // The page that only existed on the branch is in the trash, not published.
+    expect(store.liveDocuments().some((document) => document.title === 'Disputes')).toBe(false)
+    // What was replaced is kept as a version of each document.
+    expect(store.snapshots.map((snapshot) => snapshot.content).sort()).toEqual([
+      'Edited after the save.',
+      'Edited in Breezify.',
+    ])
+    expect(await inspect()).toMatchObject({ status: 'up_to_date', changedFileCount: 0 })
+    expect(repo.file(PATH)).toBe(QUICKSTART)
+  })
+
+  it('refuses a name it cannot use, without writing anything', async () => {
+    const { repo, store, sync, publish } = harness()
+    await sync()
+    repo.push({ 'notes.txt': 'someone else is working here\n' }, 'main')
+    await sync()
+    store.document('Quickstart').content = 'Edited in Breezify.'
+    const before = repo.head()
+
+    await expect(publish({ branch: 'not a branch' })).rejects.toMatchObject({ code: 'invalid_branch_name' })
+    await expect(publish({ branch: 'main' })).rejects.toMatchObject({ code: 'branch_is_synced' })
+    // A branch that exists already is somebody's work, not Breezify's to add to.
+    repo.branches.set('v1.6_taken', repo.head())
+    await expect(publish({ branch: 'v1.6_taken' })).rejects.toMatchObject({ code: 'branch_exists' })
+    expect(repo.head()).toBe(before)
+    expect(repo.pullRequests).toEqual([])
+    expect(store.source.publish_pull_request_head).toBeUndefined()
+
+    await publish({ branch: 'v1.6_pricing' })
+    store.document('Quickstart').content = 'Edited again.'
+    await expect(publish({ branch: 'v1.6_other' })).rejects.toMatchObject({
+      code: 'working_branch_open',
+      details: { branch: 'v1.6_pricing' },
+    })
   })
 })
 

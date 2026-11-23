@@ -41,18 +41,46 @@ describe('groupBranchesByVersion', () => {
     expect(groups.versions.find((version) => version.name === 'v1.1')!.branches).toEqual([])
   })
 
-  it('keeps everything else, and marks the synced and default branch', () => {
-    expect(groups.other.map((entry) => entry.name).sort()).toEqual(['breezify/readme-sync-abc', 'main', 'v2.0_ideas'])
+  it('files the branch changes are saved to under the synced version, whatever its name', () => {
+    const working = groupBranchesByVersion([...branches, branch('test', '2026-01-01T00:00:00Z')], {
+      defaultBranch: 'v1.6',
+      syncedBranch: 'v1.6',
+      workingBranch: 'test',
+    })
+    const v16 = working.versions.find((version) => version.name === 'v1.6')!
+    // First, ahead of branches updated more recently: it is the one in use.
+    expect(v16.branches.map((entry) => [entry.name, entry.working])).toEqual([
+      ['test', true],
+      ['v1.6_subscription', false],
+      ['v1.6_pricing_phases', false],
+    ])
+  })
+
+  it('leaves out branches that belong to no version, and marks the synced and default branch', () => {
+    const listed = groups.versions.flatMap((version) => [version.name, ...version.branches.map((entry) => entry.name)])
+    expect(listed).not.toContain('main')
+    expect(listed).not.toContain('breezify/readme-sync-abc')
+    expect(listed).not.toContain('v2.0_ideas')
     expect(groups.versions.find((version) => version.name === 'v1.6')).toMatchObject({ synced: true, isDefault: true })
     expect(groups.versions.find((version) => version.name === 'v1.9')).toMatchObject({ synced: false, isDefault: false })
     expect(groups.total).toBe(10)
+  })
+
+  it('counts the synced branch as a version when it is not named like one', () => {
+    const synced = groupBranchesByVersion([...branches, branch('main_intro')], {
+      defaultBranch: 'main',
+      syncedBranch: 'main',
+    })
+    // After the named versions, with the branches cut from it.
+    expect(synced.versions.map((version) => version.name)).toEqual(['v1.10', 'v1.9', 'v1.6', 'v1.1', 'main'])
+    expect(synced.versions.at(-1)).toMatchObject({ synced: true, isDefault: true })
+    expect(synced.versions.at(-1)!.branches.map((entry) => entry.name)).toEqual(['main_intro'])
   })
 
   it('filters by branch name or author, keeping the version a match sits under', () => {
     const filtered = filterBranchGroups(groups, 'PRICING')
     expect(filtered.versions.map((version) => version.name)).toEqual(['v1.6'])
     expect(filtered.versions[0]!.branches.map((entry) => entry.name)).toEqual(['v1.6_pricing_phases'])
-    expect(filtered.other).toEqual([])
     // Matching a version keeps all of its branches.
     expect(filterBranchGroups(groups, 'v1.6').versions[0]!.branches).toHaveLength(2)
   })

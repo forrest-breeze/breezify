@@ -12,6 +12,7 @@ import Link from "@tiptap/extension-link"
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight"
 import { TableKit } from "@tiptap/extension-table"
 import { renderDocumentHtml } from "@/lib/render-document-html"
+import { editorContent } from "@/lib/editor-content"
 import { DIRECTIVE_SOURCE, RENDERED_DIRECTIVE } from "@/lib/document-tabs"
 import { DOMParser as ProseMirrorDOMParser } from "@tiptap/pm/model"
 import { Markdown } from "tiptap-markdown"
@@ -229,7 +230,7 @@ export const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(
           ? [DiffHighlight.configure({ baseline: diffBaseline })]
           : []),
       ],
-      content: DIRECTIVE_SOURCE.test(content) ? renderDocumentHtml(content) : content,
+      content: editorContent(content),
       editable,
       editorProps: {
         attributes: {
@@ -362,7 +363,7 @@ export const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(
         // Use setTimeout to move the setContent call out of the current render/effect cycle
         // and avoid the "flushSync was called from inside a lifecycle method" warning.
         const t = setTimeout(() => {
-          editor.commands.setContent(DIRECTIVE_SOURCE.test(content) ? renderDocumentHtml(content) : content)
+          editor.commands.setContent(editorContent(content))
           suppressUpdateRef.current = false
           // Tiptap may normalize the content (parse markdown, assign heading
           // nodeIds, etc.). Surface the normalized HTML so the parent's

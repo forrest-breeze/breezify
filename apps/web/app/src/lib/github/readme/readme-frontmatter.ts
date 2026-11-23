@@ -77,11 +77,15 @@ export function parseReadmeFile(raw: string): ParsedReadmeFile {
  * Write a page. When `rawFrontmatter` is given it is used verbatim: the caller
  * passes it when the frontmatter is unchanged, so the author's own YAML
  * spelling (quotes, folding, comments) survives an edit to the body.
+ *
+ * `exactBody` writes the body as given, blank lines around it included: the
+ * caller passes it for a body assembled from the file's own text.
  */
 export function serializeReadmeFile(
   frontmatter: ReadmeFrontmatter,
   body: string,
   rawFrontmatter?: string | null,
+  exactBody = false,
 ): string {
   const trimmedBody = body.replace(/^\n+/, '').replace(/\s+$/, '')
   const keys = Object.keys(frontmatter)
@@ -102,7 +106,7 @@ export function serializeReadmeFile(
           })
           .replace(/\s+$/, '')}\n---\n`
   if (!trimmedBody) return head || '\n'
-  return `${head}${trimmedBody}\n`
+  return exactBody ? `${head}${body}` : `${head}${trimmedBody}\n`
 }
 
 function text(value: unknown): string {

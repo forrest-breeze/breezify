@@ -36,6 +36,7 @@ import { ReadmePublishError } from './readme-publish'
 import {
   isReadmeFormatSource,
   openApiSourceRepositoryPath,
+  awaitsReadmeWorkspaceReset,
   reconcileReadmePublishPullRequest,
   removeOpenApiSourceFromLinkedRepository,
   syncReadmeSource,
@@ -182,6 +183,56 @@ describe('reconcileReadmePublishPullRequest', () => {
       publish_pull_request_url: null,
       publish_pull_request_head: null,
       publish_last_commit_sha: null,
+    })
+  })
+
+  describe('a working branch someone named', () => {
+    const onBranch = source({
+      publish_mode: 'direct',
+      publish_pull_request_number: 9,
+      publish_pull_request_head: 'v1.6_pricing',
+    })
+
+    it('resets the workspace to the synced branch when the branch is closed or deleted', async () => {
+      // Deleting the branch on GitHub closes its pull request without a merge.
+      mocks.getPullRequest.mockResolvedValue({ number: 9, state: 'closed', merged: false })
+      const reset = source({ sync_status: 'pending', pending_sync_mode: 'replace_breezify' })
+      const { admin, calls } = fakeAdmin({ github_hosted_docs_sources: reset })
+      expect(await reconcileReadmePublishPullRequest(onBranch, admin)).toBe(reset)
+      expect(calls[0]!.update).toEqual({
+        publish_pull_request_number: null,
+        publish_pull_request_url: null,
+        publish_pull_request_head: null,
+        publish_last_commit_sha: null,
+        // Not publishable until the sync has put GitHub's content back.
+        sync_status: 'pending',
+        pending_sync_mode: 'replace_breezify',
+        last_sync_error: null,
+      })
+      // Recorded only while no sync is running.
+      expect(calls[0]!.filters).toContain('sync_status.eq')
+      expect(awaitsReadmeWorkspaceReset(reset)).toBe(true)
+    })
+
+    it('keeps the workspace as it is when the branch was merged', async () => {
+      mocks.getPullRequest.mockResolvedValue({ number: 9, state: 'closed', merged: true })
+      const { admin, calls } = fakeAdmin({ github_hosted_docs_sources: source() })
+      await reconcileReadmePublishPullRequest(onBranch, admin)
+      expect(calls[0]!.update).toEqual({
+        publish_pull_request_number: null,
+        publish_pull_request_url: null,
+        publish_pull_request_head: null,
+        publish_last_commit_sha: null,
+      })
+      expect(awaitsReadmeWorkspaceReset(source())).toBe(false)
+    })
+
+    it('waits for a running sync before discarding the branch', async () => {
+      mocks.getPullRequest.mockResolvedValue({ number: 9, state: 'closed', merged: false })
+      const syncing = { ...onBranch, sync_status: 'syncing' as const }
+      const { admin, calls } = fakeAdmin({})
+      expect(await reconcileReadmePublishPullRequest(syncing, admin)).toBe(syncing)
+      expect(calls).toEqual([])
     })
   })
 

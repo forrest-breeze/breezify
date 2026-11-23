@@ -54,6 +54,8 @@ export interface GitHubPR {
   merged_at?: string | null
   merge_commit_sha?: string | null
   head?: { ref: string; sha?: string }
+  /** The branch the pull request merges into. */
+  base?: { ref: string }
   /** True while the pull request is a draft, which GitHub refuses to merge. */
   draft?: boolean
   /** GraphQL id, needed to take a pull request out of draft. */
@@ -1154,6 +1156,69 @@ export async function getPullRequest(
   }
 
   return (await res.json()) as GitHubPR
+}
+
+export interface GitHubComparisonCommit {
+  sha: string
+  html_url?: string
+  commit: {
+    message: string
+    author: { name?: string | null; email?: string | null; date?: string | null } | null
+  }
+  /** The GitHub account behind the commit; null when the email matches none. */
+  author: (GitHubUser & { avatar_url?: string }) | null
+}
+
+export interface GitHubComparisonFile {
+  filename: string
+  previous_filename?: string
+  status: string
+  additions: number
+  deletions: number
+  /** Unified diff of the file. Absent for binary and very large files. */
+  patch?: string
+}
+
+export interface GitHubComparison {
+  status: 'ahead' | 'behind' | 'identical' | 'diverged'
+  ahead_by: number
+  behind_by: number
+  total_commits: number
+  commits: GitHubComparisonCommit[]
+  files?: GitHubComparisonFile[]
+}
+
+/**
+ * What `head` adds to `base`: the commits only `head` has and the files they
+ * change, measured from where the two diverged (GitHub's three-dot compare, the
+ * same comparison a pull request shows). One page: up to 100 commits and 300
+ * files.
+ */
+export async function compareRepositoryRefs(
+  token: string,
+  repoFullName: string,
+  base: string,
+  head: string,
+): Promise<GitHubComparison> {
+  const url = `${GITHUB_API}/repos/${repoFullName}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100`
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+    signal: AbortSignal.timeout(15000),
+  })
+
+  if (!res.ok) {
+    const body = await readErrorBody(res)
+    throw new GitHubApiError(
+      `GitHub API responded ${res.status} for ${url}${body ? `: ${body}` : ''}`,
+      res.status,
+    )
+  }
+
+  return (await res.json()) as GitHubComparison
 }
 
 export interface GitHubBranchSummary {

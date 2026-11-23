@@ -4,7 +4,8 @@
 // ReadMe keeps one Git branch per docs version (`v1.6`) and names the working
 // branches cut from it `<version>_<name>` (`v1.6_pricing_phases`). This groups
 // a repository's branches the same way, so a picker can show each version with
-// the branches that belong to it.
+// the branches that belong to it. A branch that belongs to no version is left
+// out; the synced branch always counts as a version, whatever it is named.
 // ---------------------------------------------------------------------------
 
 export interface RepositoryBranch {
@@ -20,6 +21,8 @@ export interface BranchEntry extends RepositoryBranch {
   synced: boolean
   /** The repository's default branch. */
   isDefault: boolean
+  /** The branch workspace changes are being saved to. */
+  working: boolean
 }
 
 export interface VersionGroup extends BranchEntry {
@@ -28,8 +31,7 @@ export interface VersionGroup extends BranchEntry {
 
 export interface BranchGroups {
   versions: VersionGroup[]
-  /** Branches that belong to no version. */
-  other: BranchEntry[]
+  /** Every branch in the repository, including those outside any version. */
   total: number
 }
 
@@ -43,8 +45,11 @@ function versionParts(name: string): number[] {
   return name.replace(/^v/i, '').split('.').map(Number)
 }
 
-/** Newest version first: 1.10 sorts above 1.9. */
+/** Newest version first: 1.10 sorts above 1.9. A synced branch that is not named like a version sorts last. */
 function compareVersionsDescending(a: string, b: string): number {
+  const named = Number(isVersionBranch(b)) - Number(isVersionBranch(a))
+  if (named !== 0) return named
+  if (!isVersionBranch(a)) return a.localeCompare(b)
   const left = versionParts(a)
   const right = versionParts(b)
   for (let index = 0; index < Math.max(left.length, right.length); index++) {
@@ -62,35 +67,49 @@ function newestFirst(a: RepositoryBranch, b: RepositoryBranch): number {
 
 export function groupBranchesByVersion(
   branches: readonly RepositoryBranch[],
-  context: { defaultBranch: string | null; syncedBranch: string | null },
+  context: {
+    defaultBranch: string | null
+    syncedBranch: string | null
+    /** The branch workspace changes are being saved to, cut from the synced one. */
+    workingBranch?: string | null
+  },
 ): BranchGroups {
   const entry = (branch: RepositoryBranch): BranchEntry => ({
     ...branch,
     synced: branch.name === context.syncedBranch,
     isDefault: branch.name === context.defaultBranch,
+    working: Boolean(context.workingBranch) && branch.name === context.workingBranch,
   })
+  const isVersion = (branch: RepositoryBranch): boolean =>
+    isVersionBranch(branch.name) || branch.name === context.syncedBranch
   const versions = branches
-    .filter((branch) => isVersionBranch(branch.name))
+    .filter(isVersion)
     .sort((a, b) => compareVersionsDescending(a.name, b.name))
     .map((branch): VersionGroup => ({ ...entry(branch), branches: [] }))
 
-  const other: BranchEntry[] = []
   for (const branch of branches) {
-    if (isVersionBranch(branch.name)) continue
+    if (isVersion(branch)) continue
     // The longest version that prefixes the name, so `v1.10_x` is not filed
     // under `v1.1`.
-    const owner = versions
-      .filter(
-        (version) =>
-          branch.name.startsWith(`${version.name}_`) || branch.name.startsWith(`${version.name}/`),
-      )
-      .sort((a, b) => b.name.length - a.name.length)[0]
-    if (owner) owner.branches.push(entry(branch))
-    else other.push(entry(branch))
+    const owner =
+      // The working branch was cut from the synced version, whatever it is
+      // called, so that is where it belongs.
+      (branch.name === context.workingBranch
+        ? versions.find((version) => version.name === context.syncedBranch)
+        : undefined) ??
+      versions
+        .filter(
+          (version) =>
+            branch.name.startsWith(`${version.name}_`) || branch.name.startsWith(`${version.name}/`),
+        )
+        .sort((a, b) => b.name.length - a.name.length)[0]
+    owner?.branches.push(entry(branch))
   }
-  for (const version of versions) version.branches.sort(newestFirst)
-  other.sort(newestFirst)
-  return { versions, other, total: branches.length }
+  for (const version of versions) {
+    // The working branch first: it is the one being worked on.
+    version.branches.sort((a, b) => Number(b.working) - Number(a.working) || newestFirst(a, b))
+  }
+  return { versions, total: branches.length }
 }
 
 /** `3mo ago`, the compact age shown beside a branch. */
@@ -125,6 +144,5 @@ export function filterBranchGroups(groups: BranchGroups, query: string): BranchG
         branches: matches(version) ? version.branches : version.branches.filter(matches),
       }))
       .filter((version) => matches(version) || version.branches.length > 0),
-    other: groups.other.filter(matches),
   }
 }

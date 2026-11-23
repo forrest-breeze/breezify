@@ -124,11 +124,14 @@ vi.mock("@/components/app/editor/tiptap-editor", async () => {
 vi.mock("@/components/app/version-history-panel", () => ({
   VersionHistoryPanel: ({
     onClose,
+    onRestore,
   }: {
     onClose?: () => void
+    onRestore?: () => void
   }) => (
     <div data-testid="version-history-panel">
       <button type="button" onClick={onClose} aria-label="Close version history" />
+      <button type="button" onClick={onRestore} aria-label="Revert to a version" />
     </div>
   ),
 }))
@@ -464,6 +467,21 @@ describe("DocumentEditor publishing", () => {
         expect.objectContaining({ documentId: "doc-1" }),
       )
     })
+    unsubscribe()
+  })
+
+  it("announces a reverted version too, which is saved without an edit", async () => {
+    const user = userEvent.setup()
+    const onSaved = vi.fn()
+    const unsubscribe = subscribeToWorkspaceDocumentSaves(onSaved)
+    renderEditor()
+
+    await user.click(screen.getByRole("button", { name: "Open version history" }))
+    await user.click(screen.getByRole("button", { name: "Revert to a version" }))
+
+    expect(onSaved).toHaveBeenCalledWith(
+      expect.objectContaining({ documentId: "doc-1" }),
+    )
     unsubscribe()
   })
 

@@ -195,6 +195,40 @@ describe("PortalApiReferenceContent", () => {
 
     expect(screen.getByText("No reference docs yet")).toBeInTheDocument()
   })
+
+  it("says the reference was deleted when its content no longer exists", () => {
+    render(
+      <PortalApiReferenceContent
+        title="API Reference"
+        brandName="Acme"
+        items={[]}
+        active={null}
+        contentDeleted
+        {...chrome}
+      />,
+    )
+
+    expect(screen.getByRole("status")).toHaveTextContent("This API reference was deleted")
+    expect(screen.getByText("Its content is no longer available.")).toBeInTheDocument()
+    expect(screen.queryByText("No reference docs yet")).not.toBeInTheDocument()
+    expect(screen.queryByText(/Explore Acme endpoints/)).not.toBeInTheDocument()
+  })
+
+  it("tells an editor how to fix a deleted reference", () => {
+    render(
+      <PortalApiReferenceContent
+        title="API Reference"
+        brandName="Acme"
+        items={[]}
+        active={null}
+        contentDeleted
+        editable
+        {...chrome}
+      />,
+    )
+
+    expect(screen.getByText(/Choose new content for the page in the portal editor/)).toBeInTheDocument()
+  })
 })
 
  it("renders example content in a labeled panel alongside the documentation", () => {

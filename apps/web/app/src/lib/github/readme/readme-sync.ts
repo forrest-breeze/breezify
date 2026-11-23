@@ -52,6 +52,7 @@ import {
   type ReadmeTreeFile,
 } from './readme-layout'
 import { readmeBodyToMarkdown } from './readme-markdown'
+import { canonicalReadmeMarkdown, sameReadmeContent } from './readme-preserve'
 import type { ReadmeStore, ReadmeStoreDocument, ReadmeStoreFolder } from './readme-store'
 
 /**
@@ -239,6 +240,7 @@ export async function syncReadmeRepository(
   deps: ReadmeSyncDeps,
 ): Promise<ReadmeSyncResult> {
   const { store, toMarkdown } = deps
+  const canonical = (markdown: string): string => canonicalReadmeMarkdown(markdown, toMarkdown)
   const getToken = deps.getToken ?? getInstallationToken
   const getRepo = deps.getRepo ?? getRepository
   const getCommit = deps.getCommit ?? getRepositoryCommit
@@ -608,7 +610,10 @@ export async function syncReadmeRepository(
         ? currentHash !== link.indexMarkdownHash ||
           (link.indexTitle !== null && folder.displayName !== link.indexTitle)
         : Boolean(folder.content?.trim())
-      const converged = currentHash === incomingHash
+      // Same content, also when a publish kept the file's own spelling.
+      const converged =
+        currentHash === incomingHash ||
+        sameReadmeContent(toMarkdown(index.markdown), toMarkdown(folder.content), canonical)
       // When the landing page was edited on both sides, Breezify's copy stays and
       // is written back on the next publish; the link keeps the old checkpoint
       // so that publish sees the difference.
@@ -620,7 +625,8 @@ export async function syncReadmeRepository(
         Object.assign(nextLink, {
           indexPath: index.file.path,
           indexBlobSha: index.file.sha,
-          indexMarkdownHash: incomingHash,
+          // The hash of the content the folder holds from here on.
+          indexMarkdownHash: converged ? currentHash : incomingHash,
           indexTitle: patch.displayName ?? folder.displayName,
           indexFrontmatter: index.frontmatter,
           indexFrontmatterRaw: index.frontmatterRaw,
@@ -791,7 +797,13 @@ export async function syncReadmeRepository(
       link !== null &&
       link.markdownHash === currentHash &&
       (link.title === null || link.title === existing.title)
-    const converged = currentHash === incomingHash && existing.title === page.title
+    // A publish keeps the repository's own spelling for whatever was not
+    // edited, so the file it wrote comes back as different text that renders
+    // the same as the document. That is the same content, not a change.
+    const converged =
+      existing.title === page.title &&
+      (currentHash === incomingHash ||
+        sameReadmeContent(toMarkdown(page.markdown), toMarkdown(existing.content), canonical))
     if (target.mode !== 'replace_breezify' && link !== null && !unedited && !converged) {
       await store.updateDocument(existing.id, {
         // A file that moved on GitHub keeps its document pointed at it, so
@@ -857,7 +869,9 @@ export async function syncReadmeRepository(
         metadata: {
           ...(existing.metadata ?? {}),
           ...metadata,
-          // Keep the stored representation's own hash for the editor.
+          // The document keeps its own content, so the link records that
+          // content's hash, and the stored representation's for the editor.
+          readme_markdown_hash: currentHash,
           github_hosted_content_hash: sha256(existing.content),
         },
       })
