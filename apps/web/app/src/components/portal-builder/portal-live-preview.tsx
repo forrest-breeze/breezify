@@ -84,6 +84,37 @@ function usePreviewFrame(device: PreviewDevice): PreviewFrame {
   }
 }
 
+/**
+ * How far the preview can be magnified past fitting the panel. 1 is the fit.
+ * Zoom is a view of the same render: the device viewport, and with it the
+ * portal's responsive layout, does not change.
+ */
+const ZOOM_STEPS = [1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3] as const
+
+type ZoomAction = "in" | "out" | "reset"
+
+/** The browser's zoom shortcut a key press is, if any: Cmd/Ctrl with +, - or 0. */
+export function previewZoomAction(event: {
+  key: string
+  metaKey: boolean
+  ctrlKey: boolean
+  altKey: boolean
+}): ZoomAction | null {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return null
+  if (event.key === "=" || event.key === "+") return "in"
+  if (event.key === "-" || event.key === "_") return "out"
+  if (event.key === "0") return "reset"
+  return null
+}
+
+function nextZoom(current: number, action: ZoomAction): number {
+  if (action === "reset") return 1
+  const index = ZOOM_STEPS.findIndex((step) => step >= current)
+  const at = index === -1 ? ZOOM_STEPS.length - 1 : index
+  const next = action === "in" ? at + 1 : at - 1
+  return ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, next))]!
+}
+
 /** Bezel thickness (px, unscaled) around the mobile preview screen. */
 const PHONE_BEZEL = 10
 
@@ -314,7 +345,7 @@ export function PortalLivePreview({
   // The phone bezel sits outside the scaled screen, so reserve its thickness
   // (both sides) before fitting the viewport into the panel.
   const bezelInset = isPhone ? PHONE_BEZEL * 2 : 0
-  const scale =
+  const fitScale =
     fitArea.width > 0 && fitArea.height > 0
       ? Math.min(
           (fitArea.width - bezelInset) / frame.width,
@@ -322,8 +353,35 @@ export function PortalLivePreview({
           1,
         )
       : 1
+  // Cmd/Ctrl with +, - or 0 zooms the preview instead of the browser while the
+  // pointer or the focus is in this panel; everywhere else the browser's own
+  // zoom is untouched. Past the fit the panel scrolls.
+  const [zoom, setZoom] = useState(1)
+  const scale = fitScale * zoom
   const scaledWidth = Math.round(frame.width * scale)
   const scaledHeight = Math.round(frame.height * scale)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const pointerInsideRef = useRef(false)
+  // One handler for this document and the preview frame's: a key pressed with
+  // the focus inside the frame never reaches this document.
+  const handleZoomKey = useCallback((event: KeyboardEvent, inFrame: boolean): void => {
+    const action = previewZoomAction(event)
+    if (!action) return
+    if (!inFrame) {
+      const focused = document.activeElement
+      const inPanel =
+        pointerInsideRef.current ||
+        Boolean(focused && focused !== document.body && panelRef.current?.contains(focused))
+      if (!inPanel) return
+    }
+    event.preventDefault()
+    setZoom((current) => nextZoom(current, action))
+  }, [])
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => handleZoomKey(event, false)
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
+  }, [handleZoomKey])
   // The iframe is a same-origin server render that's expensive to reload, so the
   // light/dark swap must NOT remount it. We bake the theme into the src only when
   // the frame genuinely (re)mounts — device switch or post-save reload — and
@@ -483,6 +541,11 @@ export function PortalLivePreview({
     // every reload.
     const frameDocument = iframeRef.current?.contentDocument
     frameDocument?.addEventListener(
+      "keydown",
+      (event) => handleZoomKey(event, true),
+      true,
+    )
+    frameDocument?.addEventListener(
       "click",
       (event) => {
         if (
@@ -518,7 +581,7 @@ export function PortalLivePreview({
       },
       true,
     )
-  }, [applyPreviewTheme, committedFrame.key])
+  }, [applyPreviewTheme, committedFrame.key, handleZoomKey])
 
   useEffect(() => {
     applyPreviewTheme()
@@ -568,21 +631,43 @@ export function PortalLivePreview({
   }, [])
 
   return (
-    <div className={cn("flex h-full flex-col", className)}>
+    <div
+      ref={panelRef}
+      className={cn("flex h-full flex-col", className)}
+      onPointerEnter={() => {
+        pointerInsideRef.current = true
+      }}
+      onPointerLeave={() => {
+        pointerInsideRef.current = false
+      }}
+    >
       {/* Both devices keep their own viewport and scale visually to fit the
           panel. Resizing the panel must never change responsive breakpoints or
           the amount of content visible within the device viewport.
           Controls float over the backdrop — no chrome bar. */}
-      {/* pt-14 reserves room for the floating top-right controls (actions +
-          orientation, absolute top-0) so the centered preview card never slides
-          under them. Other sides keep the original p-4 inset. */}
-      <div className="relative flex-1 overflow-auto bg-muted/30 px-4 pb-4 pt-14 scrollbar-none">
+      {/* The backdrop and the floating controls belong to the panel and stay
+          put; only the layer holding the preview card scrolls, once the card
+          is zoomed past the panel. */}
+      <div className="relative flex-1 overflow-hidden bg-muted/30">
         <PreviewMeshBackground />
 
         {/* Floating controls: actions + orientation, top-right.
             No header bar, no dimensions/url chrome. */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-end gap-2 p-3">
           <div className="pointer-events-auto flex items-center gap-2">
+            {zoom !== 1 ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="tabular-nums"
+                aria-label={`Preview zoomed to ${Math.round(zoom * 100)}%. Reset zoom`}
+                title="Reset zoom (Cmd/Ctrl 0)"
+                onClick={() => setZoom(1)}
+              >
+                {Math.round(zoom * 100)}%
+              </Button>
+            ) : null}
             {actions}
             <div className="flex items-center rounded-md bg-muted p-0.5">
               <Button
@@ -609,14 +694,32 @@ export function PortalLivePreview({
           </div>
         </div>
 
+        {/* The area the card is fitted into: the panel less a 1rem inset and
+            the strip the floating controls occupy (top-14). Measured apart
+            from the scrolling content, which grows with the zoom. */}
         <div
           ref={fitAreaRef}
-          className="relative flex h-full min-h-[360px] w-full items-center justify-center"
+          aria-hidden="true"
+          className="pointer-events-none invisible absolute inset-x-4 bottom-4 top-14 min-h-[360px]"
+        />
+
+        {/* Starts under the controls (top-12 + pt-2 = the fit area's top-14),
+            so a zoomed card scrolls beneath that strip instead of behind the
+            buttons. The padding is inside the scrolled content: the inset
+            shows at every edge the card is scrolled to. min-h keeps the fit
+            area's 360px floor plus that padding. */}
+        <div
+          data-testid="portal-preview-scroll"
+          className="absolute inset-x-0 bottom-0 top-12 overflow-auto scrollbar-none"
         >
+        <div className="flex min-h-[max(100%,384px)] w-max min-w-full px-4 pb-4 pt-2">
           <div
             data-testid={isPhone ? "portal-preview-phone" : undefined}
             className={cn(
-              "relative",
+              // Auto margins center the card while it fits and, unlike
+              // centering on the container, leave all of it reachable by
+              // scrolling once it is zoomed past the panel.
+              "relative m-auto shrink-0",
               isPhone &&
                 "rounded-[3rem] bg-neutral-900 shadow-[0_0_0_1px_rgba(255,255,255,0.08)_inset,0_0_0_1px_rgba(0,0,0,0.4),0_30px_60px_-20px_rgba(15,23,42,0.45)] dark:bg-neutral-950",
             )}
@@ -708,6 +811,7 @@ export function PortalLivePreview({
             )}
           </div>
           </div>
+        </div>
         </div>
       </div>
     </div>

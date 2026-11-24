@@ -8,6 +8,9 @@
  * portal must not serve it either: not in navigation, not in search, and not
  * by direct link.
  *
+ * A folder with nothing public left in it (every page hidden) is left out too,
+ * so it does not render as an empty section; see repositoryHiddenFolderIds.
+ *
  * A whole directory the repository keeps off its site is a different matter:
  * that is the folder's visibility, which the sync sets from the repository
  * (lib/github/readme/readme-folder-visibility.ts) and members can change.
@@ -55,18 +58,33 @@ export function isRepositoryHiddenFolderIndex(sourceMetadata: unknown): boolean 
   return isHiddenValue(frontmatter?.hidden)
 }
 
+/** What a folder has of its own, as far as the public is concerned. */
+export interface FolderPublicContent {
+  /** Its landing page (`index.md`) is `hidden: true`. */
+  hiddenIndex: ReadonlySet<string>
+  /** It has a landing page with content, and that page is not hidden. */
+  withLanding: ReadonlySet<string>
+  /** It holds at least one page that is not hidden. */
+  withVisibleDocs: ReadonlySet<string>
+  /** It holds at least one hidden page. */
+  withHiddenDocs: ReadonlySet<string>
+}
+
 /**
- * Which folders with a hidden landing page have nothing public left under
- * them. Pure half of repositoryHiddenFolderIds.
+ * Which folders have nothing public left in or under them, so that they would
+ * render as an empty section. Pure half of repositoryHiddenFolderIds.
  *
- * A candidate goes when it holds no visible document and every child folder has
- * gone the same way. A child that is not a candidate always keeps its parent,
- * even when it is empty — only the repository's `hidden` flag removes a folder.
+ * A folder goes when it holds no visible page, every child folder has gone the
+ * same way, and what remains is only what the repository hides: a hidden
+ * landing page, or no landing page and nothing but hidden pages or hidden
+ * child folders.
+ *
+ * A folder that is merely empty stays: nothing in it was hidden, so it is a
+ * section someone has not filled yet, not one the repository keeps off its site.
  */
 export function foldersHiddenByRepository(
   folders: ReadonlyArray<{ id: string; parent_folder_id: string | null }>,
-  hiddenIndexFolderIds: ReadonlySet<string>,
-  foldersWithVisibleDocs: ReadonlySet<string>,
+  content: FolderPublicContent,
 ): Set<string> {
   const childrenOf = new Map<string, string[]>()
   for (const folder of folders) {
@@ -79,9 +97,13 @@ export function foldersHiddenByRepository(
   // Leaves first: a parent only goes once its last child has.
   for (let changed = true; changed; ) {
     changed = false
-    for (const id of hiddenIndexFolderIds) {
-      if (hidden.has(id) || foldersWithVisibleDocs.has(id)) continue
-      if ((childrenOf.get(id) ?? []).every((child) => hidden.has(child))) {
+    for (const { id } of folders) {
+      if (hidden.has(id) || content.withVisibleDocs.has(id)) continue
+      const children = childrenOf.get(id) ?? []
+      if (!children.every((child) => hidden.has(child))) continue
+      const onlyHiddenContent =
+        !content.withLanding.has(id) && (content.withHiddenDocs.has(id) || children.length > 0)
+      if (content.hiddenIndex.has(id) || onlyHiddenContent) {
         hidden.add(id)
         changed = true
       }
@@ -90,10 +112,15 @@ export function foldersHiddenByRepository(
   return hidden
 }
 
+const PAGE_SIZE = 1000
+/** Pages of document rows read before giving up and showing the folders. */
+const MAX_PAGES = 20
+
 /**
- * Folders the repository hides entirely: the landing page (`index.md`) is
- * `hidden: true` and so is every page beneath it. The repository's own site
- * shows no trace of such a directory.
+ * Folders the public should not see because nothing in them is public: every
+ * page beneath is `hidden: true` in the repository, and so is the landing page
+ * (`index.md`) if there is one. The repository's own site shows no trace of
+ * such a directory.
  *
  * `folders` is the set of folders the public can otherwise see; a folder
  * outside it never counts as a child that keeps its parent visible. Throws on a
@@ -104,6 +131,8 @@ export async function repositoryHiddenFolderIds(
   workspaceId: string,
   folders: ReadonlyArray<{ id: string; parent_folder_id: string | null }>,
 ): Promise<Set<string>> {
+  const listed = new Map(folders.map((folder) => [folder.id, folder]))
+
   const { data: indexRows, error: indexError } = await client
     .from("folders")
     .select("id")
@@ -112,27 +141,85 @@ export async function repositoryHiddenFolderIds(
   if (indexError) {
     throw new Error(`repository-hidden folders query failed: ${indexError.message}`)
   }
-  const listed = new Set(folders.map((folder) => folder.id))
-  const candidates = new Set(
-    ((indexRows ?? []) as Array<{ id: string }>)
-      .map((row) => row.id)
-      .filter((id) => listed.has(id)),
+  const hiddenIndex = new Set(
+    ((indexRows ?? []) as Array<{ id: string }>).map((row) => row.id).filter((id) => listed.has(id)),
   )
-  if (candidates.size === 0) return candidates
 
-  const { data: docRows, error: docError } = await client
+  const { data: hiddenDocRows, error: hiddenDocError } = await client
     .from("documents")
-    .select(`folder_id, ${REPOSITORY_HIDDEN_SELECT}`)
+    .select("folder_id")
     .eq("workspace_id", workspaceId)
     .is("deleted_at", null)
     .in("document_type", ["source", "page"])
-    .in("folder_id", Array.from(candidates))
-  if (docError) {
-    throw new Error(`repository-hidden folder documents query failed: ${docError.message}`)
+    .eq(`source_metadata->>${REPOSITORY_HIDDEN_KEY}`, "true")
+    .not("folder_id", "is", null)
+  if (hiddenDocError) {
+    throw new Error(`repository-hidden documents query failed: ${hiddenDocError.message}`)
   }
+  const withHiddenDocs = new Set(
+    ((hiddenDocRows ?? []) as Array<{ folder_id: string }>)
+      .map((row) => row.folder_id)
+      .filter((id) => listed.has(id)),
+  )
+  if (hiddenIndex.size === 0 && withHiddenDocs.size === 0) return new Set()
+
+  // Only a folder with something hidden in it, or above one, can go.
+  const candidates = new Set<string>()
+  for (const start of [...hiddenIndex, ...withHiddenDocs]) {
+    for (
+      let id: string | null = start;
+      id !== null && listed.has(id) && !candidates.has(id);
+      id = listed.get(id)!.parent_folder_id
+    ) {
+      candidates.add(id)
+    }
+  }
+  const candidateIds = Array.from(candidates)
+
   const withVisibleDocs = new Set<string>()
-  for (const row of (docRows ?? []) as Array<{ folder_id: string; readme_hidden?: unknown }>) {
-    if (!isRepositoryHiddenDocument(row)) withVisibleDocs.add(row.folder_id)
+  for (let page = 0; ; page++) {
+    if (page === MAX_PAGES) {
+      // More documents than this reads: show the folders rather than hide one
+      // that may hold a visible page.
+      return new Set()
+    }
+    const { data: docRows, error: docError } = await client
+      .from("documents")
+      .select(`id, folder_id, ${REPOSITORY_HIDDEN_SELECT}`)
+      .eq("workspace_id", workspaceId)
+      .is("deleted_at", null)
+      .in("document_type", ["source", "page"])
+      .in("folder_id", candidateIds)
+      .order("id")
+      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+    if (docError) {
+      throw new Error(`repository-hidden folder documents query failed: ${docError.message}`)
+    }
+    const rows = (docRows ?? []) as Array<{ folder_id: string; readme_hidden?: unknown }>
+    for (const row of rows) {
+      if (!isRepositoryHiddenDocument(row)) withVisibleDocs.add(row.folder_id)
+    }
+    if (rows.length < PAGE_SIZE) break
   }
-  return foldersHiddenByRepository(folders, candidates, withVisibleDocs)
+
+  const { data: landingRows, error: landingError } = await client
+    .from("folders")
+    .select("id, content")
+    .eq("workspace_id", workspaceId)
+    .in("id", candidateIds)
+  if (landingError) {
+    throw new Error(`repository-hidden folder landing query failed: ${landingError.message}`)
+  }
+  const withLanding = new Set(
+    ((landingRows ?? []) as Array<{ id: string; content: string | null }>)
+      .filter((row) => !hiddenIndex.has(row.id) && Boolean(row.content?.trim()))
+      .map((row) => row.id),
+  )
+
+  return foldersHiddenByRepository(folders, {
+    hiddenIndex,
+    withLanding,
+    withVisibleDocs,
+    withHiddenDocs,
+  })
 }

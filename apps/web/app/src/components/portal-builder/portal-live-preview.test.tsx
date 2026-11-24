@@ -349,4 +349,129 @@ describe("PortalLivePreview", () => {
       "page=guides",
     )
   })
+
+  describe("zoom", () => {
+    const zoomKey = (key: string, init: KeyboardEventInit = { metaKey: true }): KeyboardEvent =>
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })
+    const frameScale = (): string =>
+      (screen.getByTitle("Portal preview") as HTMLIFrameElement).style.transform
+
+    it("takes the browser's zoom shortcut while the pointer is over the preview", () => {
+      const { container } = render(<PortalLivePreview {...baseProps} />)
+      expect(frameScale()).toBe("scale(1)")
+
+      fireEvent.pointerEnter(container.firstElementChild!)
+      const zoomIn = zoomKey("=")
+      act(() => {
+        window.dispatchEvent(zoomIn)
+      })
+      // The preview zooms; the browser does not.
+      expect(zoomIn.defaultPrevented).toBe(true)
+      expect(frameScale()).toBe("scale(1.1)")
+      act(() => {
+        window.dispatchEvent(zoomKey("+", { ctrlKey: true, shiftKey: true }))
+      })
+      expect(frameScale()).toBe("scale(1.25)")
+
+      act(() => {
+        window.dispatchEvent(zoomKey("-"))
+      })
+      expect(frameScale()).toBe("scale(1.1)")
+      act(() => {
+        window.dispatchEvent(zoomKey("0"))
+      })
+      expect(frameScale()).toBe("scale(1)")
+      // Never smaller than fitting the panel, and still not the browser's.
+      const zoomOut = zoomKey("-")
+      act(() => {
+        window.dispatchEvent(zoomOut)
+      })
+      expect(zoomOut.defaultPrevented).toBe(true)
+      expect(frameScale()).toBe("scale(1)")
+    })
+
+    it("leaves the browser's zoom alone everywhere else", () => {
+      const { container } = render(<PortalLivePreview {...baseProps} />)
+      const outside = zoomKey("=")
+      act(() => {
+        window.dispatchEvent(outside)
+      })
+      expect(outside.defaultPrevented).toBe(false)
+      expect(frameScale()).toBe("scale(1)")
+
+      // And again once the pointer has left the preview.
+      fireEvent.pointerEnter(container.firstElementChild!)
+      fireEvent.pointerLeave(container.firstElementChild!)
+      const after = zoomKey("=")
+      act(() => {
+        window.dispatchEvent(after)
+      })
+      expect(after.defaultPrevented).toBe(false)
+
+      // Other shortcuts are not zoom.
+      fireEvent.pointerEnter(container.firstElementChild!)
+      const save = zoomKey("s")
+      const plain = zoomKey("=", {})
+      act(() => {
+        window.dispatchEvent(save)
+        window.dispatchEvent(plain)
+      })
+      expect(save.defaultPrevented).toBe(false)
+      expect(plain.defaultPrevented).toBe(false)
+      expect(frameScale()).toBe("scale(1)")
+    })
+
+    it("zooms from inside the preview frame, where the keys never reach the editor", () => {
+      render(<PortalLivePreview {...baseProps} />)
+      const frame = screen.getByTitle("Portal preview") as HTMLIFrameElement
+      fireEvent.load(frame)
+
+      const inFrame = zoomKey("=")
+      act(() => {
+        frame.contentDocument!.dispatchEvent(inFrame)
+      })
+      expect(inFrame.defaultPrevented).toBe(true)
+      expect(frameScale()).toBe("scale(1.1)")
+    })
+
+    it("shows the zoom and resets it", () => {
+      const { container } = render(<PortalLivePreview {...baseProps} />)
+      expect(screen.queryByRole("button", { name: /Reset zoom/ })).toBeNull()
+
+      fireEvent.pointerEnter(container.firstElementChild!)
+      act(() => {
+        window.dispatchEvent(zoomKey("="))
+        window.dispatchEvent(zoomKey("="))
+      })
+      const reset = screen.getByRole("button", { name: "Preview zoomed to 125%. Reset zoom" })
+      expect(reset).toHaveTextContent("125%")
+      fireEvent.click(reset)
+      expect(frameScale()).toBe("scale(1)")
+      expect(screen.queryByRole("button", { name: /Reset zoom/ })).toBeNull()
+    })
+
+    it("scrolls only the preview card, leaving the controls and the backdrop in place", () => {
+      const { container } = render(<PortalLivePreview {...baseProps} />)
+      fireEvent.pointerEnter(container.firstElementChild!)
+      act(() => {
+        window.dispatchEvent(zoomKey("="))
+      })
+      const scroller = screen.getByTestId("portal-preview-scroll")
+      expect(scroller).toContainElement(screen.getByTitle("Portal preview"))
+      expect(scroller).not.toContainElement(screen.getByRole("button", { name: /Reset zoom/ }))
+      expect(scroller).not.toContainElement(screen.getByRole("button", { name: "Desktop preview" }))
+      expect(scroller).not.toContainElement(container.querySelector("canvas"))
+      // The panel itself must not scroll, or it would carry them along.
+      expect(scroller.parentElement).toHaveClass("overflow-hidden")
+    })
+
+    it("zooms an open document the same way", () => {
+      const { container } = render(<PortalLivePreview {...baseProps} content={<p>Editor</p>} />)
+      fireEvent.pointerEnter(container.firstElementChild!)
+      act(() => {
+        window.dispatchEvent(zoomKey("="))
+      })
+      expect(screen.getByTestId("portal-preview-editor").style.zoom).toBe("1.1")
+    })
+  })
 })
